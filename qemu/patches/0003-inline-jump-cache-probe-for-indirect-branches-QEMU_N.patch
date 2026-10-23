@@ -1,0 +1,191 @@
+From 2262c30ffd4d3a5715c998801ad9a9b4a04a94fc Mon Sep 17 00:00:00 2001
+From: nb <nb@local>
+Date: Sun, 4 Oct 2026 11:22:44 +0300
+Subject: [PATCH 3/3] inline jump-cache probe for indirect branches
+ (QEMU_NB_INLINE=1) + tcg_gen_goto_ptr; debug counters (QEMU_NB_DEBUG=1)
+
+---
+ accel/tcg/cpu-exec.c           | 30 ++++++++++++++
+ include/tcg/tcg-op-common.h    |  1 +
+ target/arm/tcg/translate-a64.c | 73 +++++++++++++++++++++++++++++++++-
+ tcg/tcg-op.c                   |  6 +++
+ 4 files changed, 108 insertions(+), 2 deletions(-)
+
+diff --git a/accel/tcg/cpu-exec.c b/accel/tcg/cpu-exec.c
+index 6a4af14d3..35879a906 100644
+--- a/accel/tcg/cpu-exec.c
++++ b/accel/tcg/cpu-exec.c
+@@ -405,6 +405,21 @@ static inline bool check_for_breakpoints(CPUState *cpu, vaddr pc,
+  * If found, return the code pointer.  If not found, return
+  * the tcg epilogue so that we return into cpu_tb_exec.
+  */
++static int nb_dbg; static unsigned long nb_cnt[8];
++static void nb_dbg_report(void)
++{
++    fprintf(stderr, "[qemu-nb] lookup_tb_ptr calls %lu: empty %lu, pc-miss %lu, flags %lu, cflags %lu, cs_base %lu, hit %lu\n",
++            nb_cnt[0], nb_cnt[1], nb_cnt[2], nb_cnt[3], nb_cnt[4], nb_cnt[5], nb_cnt[6]);
++}
++static void __attribute__((constructor)) nb_dbg_init(void)
++{
++    const char *e = getenv("QEMU_NB_DEBUG");
++    nb_dbg = e && *e == '1';
++    if (nb_dbg) {
++        atexit(nb_dbg_report);
++    }
++}
++
+ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
+ {
+     CPUState *cpu = env_cpu(env);
+@@ -420,6 +435,21 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
+         cpu_loop_exit(cpu);
+     }
+ 
++    if (unlikely(nb_dbg)) {   /* nbhost debug (QEMU_NB_DEBUG=1): why the inline probe missed */
++        uint32_t h = tb_jmp_cache_hash_func(pc);
++        TranslationBlock *e = qatomic_read(&cpu->tb_jmp_cache->array[h].tb);
++        qatomic_inc(&nb_cnt[0]);
++        if (!e) qatomic_inc(&nb_cnt[1]);
++        else if ((cflags & CF_PCREL ? cpu->tb_jmp_cache->array[h].pc : e->pc) != pc) {
++            if ((qatomic_fetch_inc(&nb_cnt[2]) & 0xfffff) == 0)
++                fprintf(stderr, "[qemu-nb] miss pc %lx slot %x holds %lx\n", (unsigned long)pc, h, (unsigned long)cpu->tb_jmp_cache->array[h].pc);
++        }
++        else if (e->flags != flags) qatomic_inc(&nb_cnt[3]);
++        else if (tb_cflags(e) != cflags) qatomic_inc(&nb_cnt[4]);
++        else if (e->cs_base != cs_base) qatomic_inc(&nb_cnt[5]);
++        else qatomic_inc(&nb_cnt[6]);
++        if ((nb_cnt[0] & 0xffffff) == 0) nb_dbg_report();
++    }
+     tb = tb_lookup(cpu, pc, cs_base, flags, cflags);
+     if (tb == NULL) {
+         return tcg_code_gen_epilogue;
+diff --git a/include/tcg/tcg-op-common.h b/include/tcg/tcg-op-common.h
+index 2d932a515..949ccaddf 100644
+--- a/include/tcg/tcg-op-common.h
++++ b/include/tcg/tcg-op-common.h
+@@ -73,6 +73,7 @@ void tcg_gen_goto_tb(unsigned idx);
+  * this op is equivalent to calling tcg_gen_exit_tb() with 0 as the argument.
+  */
+ void tcg_gen_lookup_and_goto_ptr(void);
++void tcg_gen_goto_ptr(TCGv_ptr ptr);
+ 
+ void tcg_gen_plugin_cb_start(unsigned from, unsigned type, unsigned wr);
+ void tcg_gen_plugin_cb_end(void);
+diff --git a/target/arm/tcg/translate-a64.c b/target/arm/tcg/translate-a64.c
+index f2d05c589..da894345e 100644
+--- a/target/arm/tcg/translate-a64.c
++++ b/target/arm/tcg/translate-a64.c
+@@ -72,6 +72,75 @@ static int scale_by_log2_tag_granule(DisasContext *s, int x)
+  * Include the generated decoders.
+  */
+ 
++
++#ifdef CONFIG_USER_ONLY
++#include "qemu/rcu.h"
++#include "accel/tcg/tb-jmp-cache.h"
++/*
++ * nbhost (QEMU_NB_INLINE=1): inline jump-cache probe for indirect branches (ret / br / blr and unchained jumps).
++ * The same hash and the same match rule as tb_lookup()'s hit path (pc: tb->pc, or the entry's pc with CF_PCREL; tb->flags,
++ * tb->cflags, tb->cs_base against what cpu_get_tb_cpu_state() / curr_cflags() return), done in generated code; any
++ * mismatch (or an empty entry) takes the normal helper_lookup_tb_ptr path. Not used with single-step/no-chain cflags.
++ */
++static int nb_inline_lookup = -1;
++static void gen_nb_lookup_and_goto_ptr(DisasContext *s)
++{
++    uint32_t cf = tb_cflags(s->base.tb);
++    if (nb_inline_lookup < 0) {
++        const char *e = getenv("QEMU_NB_INLINE");
++        nb_inline_lookup = e && *e == '1';
++    }
++    if (!nb_inline_lookup || (cf & (CF_NO_GOTO_PTR | CF_NO_GOTO_TB | CF_SINGLE_STEP))) {
++        tcg_gen_lookup_and_goto_ptr();
++        return;
++    }
++    QEMU_BUILD_BUG_ON(sizeof(((CPUJumpCache *)0)->array[0]) != 16);
++    TCGLabel *slow = gen_new_label();
++    TCGv_i64 pc = tcg_temp_new_i64(), h = tcg_temp_new_i64(), t = tcg_temp_new_i64();
++    TCGv_ptr jc = tcg_temp_new_ptr(), ent = tcg_temp_new_ptr(), tb = tcg_temp_new_ptr();
++    TCGv_i32 a = tcg_temp_new_i32(), b = tcg_temp_new_i32();
++
++    tcg_gen_mov_i64(pc, cpu_pc);   /* the global, not env->pc in memory: it may not be synced yet */
++    /* tb_jmp_cache_hash_func() (user mode): ((pc >> 2) ^ (pc >> (2 + BITS))) & (SIZE - 1) */
++    tcg_gen_shri_i64(h, pc, 2);
++    tcg_gen_shri_i64(t, pc, 2 + TB_JMP_CACHE_BITS);
++    tcg_gen_xor_i64(h, h, t);
++    tcg_gen_andi_i64(h, h, TB_JMP_CACHE_SIZE - 1);
++    tcg_gen_shli_i64(h, h, 4);
++    tcg_gen_ld_ptr(jc, tcg_env, offsetof(ArchCPU, parent_obj.tb_jmp_cache) - offsetof(ArchCPU, env));
++    tcg_gen_trunc_i64_ptr(ent, h);
++    tcg_gen_add_ptr(ent, ent, jc);
++    tcg_gen_ld_ptr(tb, ent, offsetof(CPUJumpCache, array[0].tb));
++    tcg_gen_brcondi_ptr(TCG_COND_EQ, tb, 0, slow);
++    if (cf & CF_PCREL) {   /* system-mode layout: the pc is kept in the entry */
++        tcg_gen_ld_i64(t, ent, offsetof(CPUJumpCache, array[0].pc));
++    } else {               /* user mode: the TB knows its pc */
++        tcg_gen_ld_i64(t, tb, offsetof(TranslationBlock, pc));
++    }
++    tcg_gen_brcond_i64(TCG_COND_NE, t, pc, slow);
++    tcg_gen_ld_i32(a, tb, offsetof(TranslationBlock, flags));
++    tcg_gen_ld_i32(b, tcg_env, offsetof(CPUARMState, hflags.flags));
++    tcg_gen_brcond_i32(TCG_COND_NE, a, b, slow);
++    tcg_gen_ld_i32(a, tb, offsetof(TranslationBlock, cflags));
++    tcg_gen_ld_i32(b, tcg_env, offsetof(ArchCPU, parent_obj.tcg_cflags) - offsetof(ArchCPU, env));
++    tcg_gen_brcond_i32(TCG_COND_NE, a, b, slow);
++    tcg_gen_ld_i64(t, tb, offsetof(TranslationBlock, cs_base));
++    tcg_gen_ld_i64(h, tcg_env, offsetof(CPUARMState, hflags.flags2));
++    if (dc_isar_feature(aa64_bti, s)) {
++        TCGv_i64 bt = tcg_temp_new_i64();
++        tcg_gen_ld32u_i64(bt, tcg_env, offsetof(CPUARMState, btype));
++        tcg_gen_deposit_i64(h, h, bt, R_TBFLAG_A64_BTYPE_SHIFT, R_TBFLAG_A64_BTYPE_LENGTH);
++    }
++    tcg_gen_brcond_i64(TCG_COND_NE, t, h, slow);
++    tcg_gen_ld_ptr(jc, tb, offsetof(TranslationBlock, tc.ptr));
++    tcg_gen_goto_ptr(jc);
++    gen_set_label(slow);
++    tcg_gen_lookup_and_goto_ptr();
++}
++#else
++#define gen_nb_lookup_and_goto_ptr(s) tcg_gen_lookup_and_goto_ptr()
++#endif
++
+ #include "decode-sme-fa64.c.inc"
+ #include "decode-a64.c.inc"
+ 
+@@ -514,7 +583,7 @@ static void gen_goto_tb(DisasContext *s, int n, int64_t diff)
+         if (s->ss_active) {
+             gen_step_complete_exception(s);
+         } else {
+-            tcg_gen_lookup_and_goto_ptr();
++            gen_nb_lookup_and_goto_ptr(s);
+             s->base.is_jmp = DISAS_NORETURN;
+         }
+     }
+@@ -14206,7 +14275,7 @@ static void aarch64_tr_tb_stop(DisasContextBase *dcbase, CPUState *cpu)
+             gen_a64_update_pc(dc, 4);
+             /* fall through */
+         case DISAS_JUMP:
+-            tcg_gen_lookup_and_goto_ptr();
++            gen_nb_lookup_and_goto_ptr(dc);
+             break;
+         case DISAS_NORETURN:
+         case DISAS_SWI:
+diff --git a/tcg/tcg-op.c b/tcg/tcg-op.c
+index aa6bc6f57..ebd089217 100644
+--- a/tcg/tcg-op.c
++++ b/tcg/tcg-op.c
+@@ -3330,6 +3330,12 @@ void tcg_gen_goto_tb(unsigned idx)
+     tcg_gen_op1i(INDEX_op_goto_tb, idx);
+ }
+ 
++/* nbhost: jump to a host code pointer computed by the translator (the inline jump-cache probe) */
++void tcg_gen_goto_ptr(TCGv_ptr ptr)
++{
++    tcg_gen_op1i(INDEX_op_goto_ptr, tcgv_ptr_arg(ptr));
++}
++
+ void tcg_gen_lookup_and_goto_ptr(void)
+ {
+     TCGv_ptr ptr;
+-- 
+2.43.0
+

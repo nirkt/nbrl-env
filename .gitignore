@@ -1,0 +1,10 @@
+# large files: not in git. setup.sh puts them in place (see README, Setup)
+apk/
+apk_extract/
+qemu/src/
+# run outputs and build leftovers
+runs/
+__pycache__/
+*.tmp
+loader/build.log
+.venv/

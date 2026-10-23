@@ -1,0 +1,40 @@
+From 6642bd212e578f9c7ebd9747e0f819cd88da3d3f Mon Sep 17 00:00:00 2001
+From: nb <nb@local>
+Date: Sun, 4 Oct 2026 11:04:00 +0300
+Subject: [PATCH 2/3] user mode: optional cross-page goto_tb (QEMU_NB_XPAGE=1)
+
+---
+ accel/tcg/translator.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/accel/tcg/translator.c b/accel/tcg/translator.c
+index 38c34009a..085ed1b5c 100644
+--- a/accel/tcg/translator.c
++++ b/accel/tcg/translator.c
+@@ -119,6 +119,23 @@ bool translator_use_goto_tb(DisasContextBase *db, vaddr dest)
+         return false;
+     }
+ 
++#ifdef CONFIG_USER_ONLY
++    /*
++     * nbhost (QEMU_NB_XPAGE=1): in user mode, chain direct branches across pages too. A TB that is invalidated (code
++     * write, munmap, mprotect) is unlinked from every TB that jumps to it (jmp lists), whatever page it is on; only a
++     * program that expects a fault when jumping into a page that lost PROT_EXEC would behave differently.
++     */
++    {
++        static int xpage = -1;
++        if (xpage < 0) {
++            const char *e = getenv("QEMU_NB_XPAGE");
++            xpage = e && *e == '1';
++        }
++        if (xpage) {
++            return true;
++        }
++    }
++#endif
+     /* Check for the dest on the same page as the start of the TB.  */
+     return ((db->pc_first ^ dest) & TARGET_PAGE_MASK) == 0;
+ }
+-- 
+2.43.0
+
