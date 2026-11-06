@@ -10,8 +10,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-# FILL IN: the direct APK link. Empty = put the APK in apk/ by hand.
-APK_URL_DEFAULT=""
+APK_URL_DEFAULT="https://pub-3e0f25080eb949a08641fd278fad96d1.r2.dev"
 
 APK_NAME="nb_68.279_release_7c5c5152.apk"
 APK_SHA256="3c249ea89050220eb32fb7eff0a94f360eb88da19244fa96f51e596bc3dcee43"
