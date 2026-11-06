@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
-# Set up the repo on Ubuntu / Debian: system packages, the game files, the emulator, the game host, the renderer and the
-# Python environment (.venv) for the training scripts.
+# Set up the repo (Ubuntu / Debian): system packages, game files, emulator, game host, renderer and the Python environment (.venv).
 #
-#   ./setup.sh                                   everything (uses sudo for the system packages)
-#   ./setup.sh --skip-apt                        the system packages are already installed
-#   NB_APK_URL=<link> ./setup.sh                 download the APK from a link you have permission to use
-#   TORCH_INDEX_URL=<index> ./setup.sh           torch from a specific index (see the note on torch below)
+#   ./setup.sh                          everything (uses sudo for the system packages)
+#   ./setup.sh --skip-apt               the system packages are already installed
+#   NB_APK_URL=<link> ./setup.sh        download the APK from a link
+#   TORCH_INDEX_URL=<index> ./setup.sh  torch from a specific index
 #
-# Not in git (GitHub refuses files over 100 MB, and the game is not ours to publish): the APK and the qemu source.
+# The APK and the qemu source are not in git (see README, Setup).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-# ---- FILL IN: the direct link to the APK, once you have permission to publish it. Leave empty to put the file in apk/ by hand.
+# FILL IN: the direct APK link. Empty = put the APK in apk/ by hand.
 APK_URL_DEFAULT=""
 
 APK_NAME="nb_68.279_release_7c5c5152.apk"

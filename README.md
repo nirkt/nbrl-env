@@ -28,11 +28,6 @@ Three large files are not in git (GitHub rejects files over 100 MB):
 The APK is checked by its sha256 (`3c249ea89050220eb32fb7eff0a94f360eb88da19244fa96f51e596bc3dcee43`). A download
 with the wrong checksum is rejected.
 
-Two settings in `setup.sh`:
-
-- `APK_URL_DEFAULT` (near the top): the direct link to the APK. It's empty until the owner has permission to publish the file. Until then, put the APK in `apk/` by hand, or pass `NB_APK_URL=<link>` when running the script.
-- `TORCH_INDEX_URL` (RL repo only): the torch build to install. The default is PyPI. For an AMD GPU, use the ROCm index from pytorch.org's install selector. The code was tested with torch 2.11 (ROCm).
-
 ## Hardware this was built and trained on
 
 - Ryzen 7 5800X (8 cores, 16 threads), 31 GB RAM, RX 9070 XT (16 GB VRAM).
@@ -49,7 +44,6 @@ Two settings in `setup.sh`:
 | game host, renderer, emulator | `loader/` (`loader/build.sh`), `glhost/` (`nbgl`), `qemu/bin/qemu-aarch64-nb` |
 | environment | `py/nbpc/` (`MAEnv`) |
 | eval and training scripts | `py/` |
-| pixel-student helpers | `py/proj.py`, `py/labels.py`, `py/proj_params*.json` (camera projection and labels for `dagger4.py` and friends) |
 | your code | `train/` (a template and an example policy) |
 | the teacher | `models/ppo_teacher_u365.pt`, `models/ppo_teacher_config.json` |
 | map | `data/map_showdown.npy` (the map the training uses) |
