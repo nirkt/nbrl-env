@@ -56,6 +56,8 @@ def vram_used_mb():
         return 0
 
 
+HUD_MASK = [(1015, 25, 1160, 95)]      # screen boxes on 2400x1080, blacked out of the pixel observation after the resize
+
 class MemoryGuard(RuntimeError):
     """raised by MAEnv.poll when the machine runs out of RAM / VRAM (the trainers checkpoint and close the env)"""
 
@@ -91,7 +93,6 @@ class MAEnv:
         self.phone_obs = self.obs_size == (256, 115)
         self.I = [_Inst(Instance(i, tag=self.tag, log_dir=log_dir, extra_args=extra_args, bell=True, gl=self.pixels)) for i in range(n)]
         if self.pixels:
-            from .vecenv import HUD_MASK
             W_, H_ = self.obs_size
             self._mask_sl = [(slice(int(np.floor(y0 * H_ / 1080.0)), int(np.ceil(y1 * H_ / 1080.0))),
                               slice(int(np.floor(x0 * W_ / 2400.0)), int(np.ceil(x1 * W_ / 2400.0)))) for (x0, y0, x1, y1) in HUD_MASK]

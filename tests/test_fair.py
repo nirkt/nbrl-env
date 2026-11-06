@@ -7,6 +7,7 @@
 import os, sys, json
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "py"))
 from nbpc.instance import Instance
 from nbpc import proto as P
 from nbpc import fair

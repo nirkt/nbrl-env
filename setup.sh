@@ -44,7 +44,7 @@ elif [ -n "$APK_URL" ]; then
     echo "downloading the APK ..."
     curl -fL --retry 3 -o "$APK.part" "$APK_URL"
     mv "$APK.part" "$APK"
-    sha_ok "$APK" "$APK_SHA256" || { echo "checksum mismatch: the file is not $APK_NAME (sha256 $APK_SHA256)" >&2; exit 1; }
+    sha_ok "$APK" "$APK_SHA256" || { rm -f "$APK"; echo "checksum mismatch: the file is not $APK_NAME (sha256 $APK_SHA256)" >&2; exit 1; }
 else
     echo "The APK is missing. Put $APK_NAME into apk/, or set NB_APK_URL=<link> and rerun." >&2
     exit 1

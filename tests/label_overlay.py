@@ -8,7 +8,8 @@ import os, sys, json, argparse
 import numpy as np
 from PIL import Image, ImageDraw
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "learn"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "py"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "py"))
 from nbpc.instance import Instance
 from nbpc import proto as P
 import state2 as S2, proj, labels as LB

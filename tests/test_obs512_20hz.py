@@ -4,6 +4,7 @@ import os, sys, time, json
 import numpy as np
 from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "py"))
 from nbpc.maenv import MAEnv
 out = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "runs", "p0_checks", "obs512_20hz"); os.makedirs(out, exist_ok=True)
 q = [61_000_000, 61_000_001]

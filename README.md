@@ -49,6 +49,7 @@ Two settings in `setup.sh`:
 | game host, renderer, emulator | `loader/` (`loader/build.sh`), `glhost/` (`nbgl`), `qemu/bin/qemu-aarch64-nb` |
 | environment | `py/nbpc/` (`MAEnv`) |
 | eval and training scripts | `py/` |
+| pixel-student helpers | `py/proj.py`, `py/labels.py`, `py/proj_params*.json` (camera projection and labels for `dagger4.py` and friends) |
 | your code | `train/` (a template and an example policy) |
 | the teacher | `models/ppo_teacher_u365.pt`, `models/ppo_teacher_config.json` |
 | map | `data/map_showdown.npy` (the map the training uses) |

@@ -3,6 +3,7 @@ all-native battles: rebuilt from (sim x, y, tick) + fair.enemy_cells only."""
 import os, sys, json
 import numpy as np, torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "py"))
 import torch_rocm_fix  # noqa
 from nbpc.instance import Instance
 from nbpc import proto as P

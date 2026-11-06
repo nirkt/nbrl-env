@@ -2,6 +2,7 @@
 interleaved agents; overwritten references are rejected by sample()."""
 import os, sys, numpy as np, torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "py"))
 import dagger4 as D
 dev = torch.device("cpu"); rep = D.Replay(50, dev); last = {}; truth = {}
 rng = np.random.default_rng(0); stacks = {}; envstack = {}; ok = 0; n = 0
