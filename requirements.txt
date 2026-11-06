@@ -1,4 +1,3 @@
-# versions this repo was tested with (the training scripts run on these)
+# Python packages used by the working code (tested versions). torch is installed by setup.sh (see TORCH_INDEX_URL).
 numpy==1.26.4
 pillow==12.1.1
-gymnasium==1.3.0
