@@ -17,17 +17,6 @@ scripts, and a template for your own code. It includes one trained model, the PP
 Setup needs Ubuntu or Debian (it uses `apt` and `sudo`) and an internet connection for the qemu source. Rerun with
 `./setup.sh --skip-apt` once the packages are installed.
 
-Three large files are not in git (GitHub rejects files over 100 MB):
-
-| file | size | where it goes | how it is obtained |
-|---|---|---|---|
-| `apk/nb_68.279_release_7c5c5152.apk` | 1.17 GB | `apk/` | put it there, or give its URL: `NB_APK_URL=https://... ./setup.sh` |
-| `qemu/src/qemu-8.2.2.tar.xz` | 129 MB | `qemu/src/` | downloaded from qemu.org by `setup.sh` |
-| `apk_extract/` | about 1.6 GB | generated | extracted from the APK by `setup.sh` |
-
-The APK is checked by its sha256 (`3c249ea89050220eb32fb7eff0a94f360eb88da19244fa96f51e596bc3dcee43`). A download
-with the wrong checksum is rejected.
-
 ## Hardware this was built and trained on
 
 - Ryzen 7 5800X (8 cores, 16 threads), 31 GB RAM, RX 9070 XT (16 GB VRAM).
