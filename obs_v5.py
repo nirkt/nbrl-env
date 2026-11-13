@@ -17,7 +17,7 @@ shortcut: area effects have no radius / kind (one class per side), the host dump
 render states the tile map does not have; add them to snap2 / encode.c when the policy needs them.
 shortcut: no box size (the sim has none; a per-class constant adds nothing to the one-hot); add with the bot adapter.
 """
-import functools, sys
+import functools, os, sys
 import numpy as np
 from nbpc import fair as F, diversity as D
 
@@ -113,17 +113,23 @@ def _cam(meta):
     return rx, (my // F.TILE * F.TILE - my)[:, None] + off
 
 
-# HUD controls (repos/nbgc/labeller/controls.py CTRL, 960 x 540 label pixels): centre x, y, radius; the seg model says 'ui' there
-HUD = ((130, 455, 54), (822, 404, 54), (722, 445, 24), (670, 497, 24), (785, 497, 28))
+# measured by sim_vs_labels.py (HISTORY 53): per tile bin (ry, rx as in _cam, floor(r / TILE) + G // 2) the share of 2815
+# label frames where every on-screen base sample of the tile is seg 'ui' (the adapter then reads UNKNOWN); max 0.5.
+# Shares < 5 % are dropped (stray ui pixels; 51 of 625 bins stay).
+HUD_UI = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "hud_ui.npy")); HUD_UI[HUD_UI < 0.05] = 0
 
 
-def hud_mask(meta):
-    """(B, G, G) bool: tiles whose centre lies under a fixed HUD control (joysticks, super / hypercharge / gadget buttons).
-    shortcut: screen = 480 + 0.085 * rx, 297.5 + 0.085 * ry px (view height-bound, ~85 px per 1000 units, y -3500..+2900);
-    replace by a measured mask once the sim-vs-labels test exists."""
+def hud_p(meta):
+    """(B, G, G) measured chance that the HUD hides each tile"""
     rx, ry = _cam(meta)
-    px, py = 480 + 0.085 * rx[:, None, :], 297.5 + 0.085 * ry[:, :, None]
-    return np.any([(px - cx) ** 2 + (py - cy) ** 2 <= r * r for cx, cy, r in HUD], 0)
+    bx = np.clip(np.floor(rx / F.TILE).astype(int) + G // 2, 0, G - 1); by = np.clip(np.floor(ry / F.TILE).astype(int) + G // 2, 0, G - 1)
+    return HUD_UI[by[:, :, None], bx[:, None, :]]
+
+
+def hud_mask(meta, rng=None):
+    """(B, G, G) bool: tiles the HUD hides. rng given: each tile hidden with its measured chance, else those > 0.5 (none)"""
+    p = hud_p(meta)
+    return rng.random(p.shape) < p if rng is not None else p > 0.5
 
 
 class ObsV5:
@@ -166,7 +172,7 @@ class ObsV5:
             row[:, XY] = r.uniform(-1.5, 1.5, n); row[:, XY + 1] = r.uniform(-F.VIEW_UP, F.VIEW_DOWN, n) / F.R
             row[:, HP] = r.random(n)
             ent[false] = row
-        g[hud_mask(meta)] = UNKNOWN                       # the seg model labels the HUD controls 'ui'
+        hud = hud_mask(meta, r); g[hud] = UNKNOWN          # the seg model labels the HUD controls 'ui'
         wrong = (g != UNKNOWN) & (r.random(g.shape) < seg[:, None, None])
         g[wrong] = r.integers(len(SEG), size=int(wrong.sum()))
         # velocity as the bot gets it: the difference of two noisy detections, 0 for one not matched to the last decision
@@ -261,13 +267,13 @@ def _check():
         outs.append(lat.build(v, grid, meta, ids)["self"][0, 0])
     assert np.allclose(outs, [0, 0, 0, 0.1, 0.2]), outs       # 2 decisions late, the first frame repeated until then
     hi = {"jitter": (0.03, 0.03), "drop": (0.5, 0.5), "fp": (0.2, 0.2), "seg": (0.2, 0.2), "latency": (0, 0)}
-    hud = hud_mask(meta)
-    assert hud[0, 18, 21] and not hud[0, 12, 12] and 0 < hud[0].sum() < 40, hud[0].sum()   # super button, 6 / 9 tiles off
+    hud = hud_p(meta) > 0   # tiles the HUD can hide (measured); none under the player
+    assert not hud_mask(meta).any() and not hud[0, 12, 12] and 0 < hud[0].sum() < 80, hud[0].sum()
     nz = ObsV5(noise=hi); kept = fps = flips = 0; d = []; on0 = False; back = vback = 0
     for t in range(300):
         n = nz.build(vec, grid, meta, ids)
         assert all(n[k].shape == o[k].shape and n[k].dtype == o[k].dtype for k in o) and n["grid"].max() <= UNKNOWN
-        assert np.array_equal(n["grid"] == UNKNOWN, (o["grid"] == UNKNOWN) | hud) and np.array_equal(n["self"], o["self"])
+        assert not ((n["grid"] == UNKNOWN) & (o["grid"] != UNKNOWN) & ~hud).any() and (n["grid"][o["grid"] == UNKNOWN] == UNKNOWN).all() and np.array_equal(n["self"], o["self"])
         on = n["ent"][0, :, 0] > 0; was = o["ent"][0, :, 0] > 0
         kept += (on & was).sum(); fps += (on & ~was).sum(); flips += (n["grid"] != o["grid"]).mean()
         if on[0]: d.append(n["ent"][0, 0, XY] - 0.5)

@@ -26,7 +26,8 @@ def rows(path):
 def truth_map(j):
     """(H, W) seg class of the job's map"""
     csvd = f"{j['apk']}/assets/csv_logic" if os.path.exists(f"{j['apk']}/assets/csv_logic/maps.csv") else os.path.join(D.ASSETS, "csv_logic")
-    name = j["map"] or next(r["Map"] for r in rows(f"{csvd}/locations.csv") if r[next(iter(r))] == j["location"])
+    loc = j["map"] or j["location"]   # job "map" is a locations.csv row name, as in framegen posecap (D.lid / its Map)
+    name = next(r["Map"] for r in rows(f"{csvd}/locations.csv") if r[next(iter(r))] == loc)
     if (csvd, name) not in _maps:
         data, cur = [], None
         for r in rows(f"{csvd}/maps.csv"):
