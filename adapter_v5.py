@@ -14,7 +14,7 @@ Tiles: walls / bushes are labelled by their visible shape (they cover the ground
 its BASE (its near-camera edge, larger y = lower on screen). A tile hidden behind a tall tile reads as that tall class
 (then its far edge is read, which may show above the wall top; behind_unknown=True makes such tiles UNKNOWN instead); rl/test_adapter_v5.py measures both.
 shortcut: own velocity comes from the caller (the bot's move command); entity velocity = matched position difference
-+ own velocity; HP / ammo bar reading is uncalibrated (no HP truth in the labels), check against real bars."""
++ own velocity; HP bars calibrated on GL-captured frames (HISTORY 54), not yet on live-game frames."""
 import numpy as np
 from obs_v5 import SEG, ENT, UNKNOWN, G, N_SELF, N_ENT, F_ENT, XY, VEL, HP
 from nbpc.fair import TILE, VIEW_X, VIEW_UP, VIEW_DOWN, R
@@ -127,14 +127,22 @@ def grid(seg, anc, phase, c, behind_unknown=False):
     return g
 
 
-def bar_fill(img, b):
-    """shortcut: filled fraction of a bar = share of columns whose median pixel is bright and saturated (fill colour vs
-    the dark empty part); uncalibrated, check on real frames"""
+# HP truth fit (calib_bars.py, HISTORY 54: 969 GL-captured frames with the state dump, 8253 bars): hp = a * read + b.
+# MAE enemy 0.204 -> 0.125, mate 0.127 -> 0.084, own 0.118 -> 0.043; ammo reads right uncorrected (MAE 0.058)
+HP_CAL = {"enemy": (0.980, 0.182), "mate": (1.019, 0.074), "own": (1.080, 0.047)}
+
+
+def bar_fill(img, b, side=None):
+    """filled fraction of a bar = share of columns whose median pixel is bright and saturated (fill colour vs the dark
+    empty part); side ('own' / 'mate' / 'enemy') = an HP bar: apply its HP_CAL fit"""
     x1, y1, x2, y2 = (int(round(t)) for t in b[1:5])
     p = img[max(y1, 0):max(y2, y1 + 1), max(x1, 0):max(x2, x1 + 1)].astype(int)
     if not p.size: return 0.0
     c = np.median(p, 0)
-    return float(((c.max(-1) > 100) & (c.max(-1) - c.min(-1) > 60)).mean())
+    f = float(((c.max(-1) > 100) & (c.max(-1) - c.min(-1) > 60)).mean())
+    if side is None: return f
+    a, k = HP_CAL[side]
+    return float(np.clip(a * f + k, 0.0, 1.0))
 
 
 class Adapter:
@@ -153,7 +161,7 @@ class Adapter:
         has = lambda n: bool((cls == _D(n)).any())
         if img is not None:
             hb = det[cls == _D("player_health")]
-            if len(hb): s[0] = bar_fill(img, hb[0])
+            if len(hb): s[0] = bar_fill(img, hb[0], "own")
             am = det[cls == _D("player_ammo")]
             if len(am): s[1] = np.mean([bar_fill(img, b) for b in am])
         s[2], s[3], s[4] = has("super_ready"), has("gadget_ready"), has("hypercharge_ready")
@@ -180,12 +188,12 @@ class Adapter:
                 ent[:n, VEL + 1] = np.where(ok, (dy - py[j]) * f + own_vel[1], 0)
             if img is not None:   # brawler HP: the bar of the same side whose centre is nearest above the box
                 for i, c in enumerate(e[:, 0]):
-                    bar = {_D("enemy"): "enemy_health", _D("teammate"): "teammate_health"}.get(int(c))
+                    bar, side = {_D("enemy"): ("enemy_health", "enemy"), _D("teammate"): ("teammate_health", "mate")}.get(int(c), (None, None))
                     hb = det[cls == _D(bar)] if bar else det[:0]
                     if len(hb):
                         bx, by = (e[i, 1] + e[i, 3]) / 2, e[i, 2]
                         k_ = np.argmin(np.abs((hb[:, 1] + hb[:, 3]) / 2 - bx) + np.abs(hb[:, 4] - by))
-                        ent[i, HP] = bar_fill(img, hb[k_])
+                        ent[i, HP] = bar_fill(img, hb[k_], side)
             self.prev = (ec, dx, dy)
         else:
             self.prev = (np.zeros(0, int), np.zeros(0), np.zeros(0))

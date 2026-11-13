@@ -3,10 +3,11 @@
   2. area effects (nbhost_rl encode.c item feature 4: 1 = bomb / enemy area, -1 = my team's area) reach the observation;
   3. generated maps (--gen k instances on ~/nb68/rl/genmaps) play without restarts;
   4. teammate respawn (host, 15 s): knock-outs with a living mate come back at a mate's position, play on (can be
-     knocked out again), dead steps carry terms["dead"] = 1 and a zero observation.
+     knocked out again), dead steps carry terms["dead"] = 1 and a zero observation;
+  5. HUD (obs_v5 noisy path, measured hud_ui.npy): tiles hidden live match the measured chance.
 python -m live_check --n 2 --minutes 8 [--gen 1]"""
 import argparse, collections, time, numpy as np
-import env_v5 as E
+import env_v5 as E, obs_v5 as O
 from nbpc import fair as F
 
 RS = collections.Counter(); RD = []   # respawn stats; distance respawned -> nearest living mate
@@ -30,7 +31,8 @@ ap.add_argument("--gen", type=int, default=0)
 a = ap.parse_args()
 gen = E.use_genmaps(a.gen) if a.gen else None
 env = T(a.n, E.make_battle_fn(10, p_team=1.0, gen=gen, p_gen=1.0), ticks=2, fair=True, max_ticks=4000)
-rng = np.random.default_rng(1); t0 = None; fins = []; steps = 0; area = collections.Counter()
+rng = np.random.default_rng(1); ob = O.ObsV5(noise=dict(O.NOISE, latency=(0, 0)), seed=1)  # no latency: compare with the same frame
+HUD = collections.Counter(); t0 = None; fins = []; steps = 0; area = collections.Counter()
 try:
     while t0 is None or time.time() - t0 < a.minutes * 60:
         obs, ids, tr = env.poll(min_ready=1, max_wait=0.01)
@@ -40,6 +42,8 @@ try:
         dd = env.dead(ids); RS["dead_obs"] += int(dd.sum()); RS["dead_obs_nonzero"] += int(np.abs(obs["vec"][dd]).sum(1).astype(bool).sum())
         on = it[..., 0] > 0.5; area["enemy_or_bomb"] += int((on & (it[..., 4] > 0.5)).sum()); area["mine"] += int((on & (it[..., 4] < -0.5)).sum())
         area["cube"] += int((on & (it[..., 3] > 0.5)).sum()); area["other"] += int((on & (abs(it[..., 4]) < 0.5) & (it[..., 3] < 0.5)).sum())
+        c = O.from_state2(obs["vec"], obs["grid"], env.last_meta)["grid"]; n_ = ob.build(obs["vec"], obs["grid"], env.last_meta, ids)["grid"]
+        vis = c != O.UNKNOWN; HUD["hidden"] += int((vis & (n_ == O.UNKNOWN)).sum()); HUD["expect"] += float(O.hud_p(env.last_meta)[vis].sum()); HUD["vis"] += int(vis.sum())
         t0 = t0 or time.time(); B = len(ids); steps += B
         env.send(ids, np.stack([rng.integers(0, 17, B), rng.integers(0, 3, B), rng.integers(0, 360, B), rng.integers(0, 8, B)], 1))
 finally:
@@ -70,3 +74,5 @@ print("respawn:", env.resp, dict(RS), "| dist to mate at respawn: n %d median %.
       "| final dead transitions", sum(1 for f in fins if f[3].get("dead")))
 if a.gen: assert genb > 0
 assert env.resp["out"] > 0 and env.resp["back"] > 0 and RD and max(RD) < 600 and RS["dead_obs_nonzero"] == 0
+print("HUD: hidden %d of %d visible tiles, expected %.0f from hud_ui.npy" % (HUD["hidden"], HUD["vis"], HUD["expect"]))
+assert HUD["hidden"] > 0 and abs(HUD["hidden"] - HUD["expect"]) < 4 * HUD["expect"] ** .5 + 10
