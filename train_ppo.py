@@ -39,7 +39,7 @@ class Buffer:
     """transition rows: observation + hidden state at action time, action, logp, value; reward / done on completion"""
     F = {"s": ((NS,), np.float16), "ent": ((O.N_ENT, O.F_ENT), np.float16), "grid": ((O.G, O.G), np.uint8), "h": ((HID,), np.float16), "priv": ((PRIV,), np.float16),
          "act": ((4,), np.int16), "logp": ((), np.float32), "val": ((), np.float32), "rew": ((), np.float32),
-         "done": ((), bool), "complete": ((), bool), "bc": ((), bool)}
+         "done": ((), bool), "complete": ((), bool), "bc": ((), bool), "dead": ((), bool)}
 
     def __init__(self, cap):
         self.cap, self.n = cap, 0
@@ -263,7 +263,7 @@ def main():
                 m = ~isev & ~opp & ((kind == "bc") == bc())   # BC battles still running after the switch are not collected
                 if m.any():
                     rows = buf.add(s=s[m], ent=o["ent"][m], grid=o["grid"][m], h=h[m], priv=pv[m], act=A[m], logp=lp[m],
-                                   val=v[m], bc=kind[m] == "bc")
+                                   val=v[m], bc=kind[m] == "bc", dead=env.dead(ids[m]))
                     for aid, j in zip(ids[m], rows): pending[int(aid)] = int(j)
                     agent_steps += int(m.sum()); dec_n += int(m.sum())
                 rec.frame(env, ids, o, A, upd)
@@ -293,7 +293,7 @@ def main():
             C = torch.as_tensor(chunks(use, a.seq), device=dev); nrow = int((C >= 0).sum())
             g = {k: T(getattr(buf, k)[:n], dt) for k, dt in (("s", torch.float32), ("ent", torch.float32), ("grid", torch.uint8),
                  ("h", torch.float32), ("priv", torch.float32), ("act", torch.long), ("logp", torch.float32), ("val", torch.float32))}
-            ADV, RET = T(adv), T(ret)
+            ADV, RET = T(adv), T(ret); LIVE = T(~buf.dead[:n], torch.float32)   # respawning rows: value only (actions ignored)
             pu = upd - a.bc_updates
             beta = 0.0 if ref is None else max(a.kl_floor, a.kl_beta * (1 - pu / max(1, a.kl_updates)))
             for pg_ in opt.param_groups: pg_["lr"] = a.bc_lr if is_bc else a.lr
@@ -305,16 +305,17 @@ def main():
                     lg, v = net.seq(g["s"][r], g["ent"][r], g["grid"][r], g["h"][r[:, 0]], g["priv"][r])
                     lg = [x[mk] for x in lg]; v = v[mk]
                     lp, ent, _ = dist_logp_ent(lg, g["act"][rf]); vl = 0.5 * ((v - RET[rf]) ** 2).mean()
+                    lv = LIVE[rf]; lm = lambda x: (x * lv).sum() / lv.sum().clamp(min=1)
                     if is_bc:
-                        loss = -lp.mean() + 0.5 * vl; st = [-lp.mean().item(), vl.item(), ent.mean().item(), 0.0, 0.0]
+                        loss = -lm(lp) + 0.5 * vl; st = [-lm(lp).item(), vl.item(), ent.mean().item(), 0.0, 0.0]
                     else:
                         ratio = (lp - g["logp"][rf]).exp(); ad = ADV[rf]; ad = (ad - ad.mean()) / (ad.std() + 1e-8)
-                        pg = torch.max(-ad * ratio, -ad * ratio.clamp(1 - a.clip, 1 + a.clip)).mean()
+                        pg = lm(torch.max(-ad * ratio, -ad * ratio.clamp(1 - a.clip, 1 + a.clip)))
                         kl = torch.zeros((), device=dev)
                         if beta > 0:
                             with torch.no_grad(): lr_, _ = ref.seq(g["s"][r], g["ent"][r], g["grid"][r], g["h"][r[:, 0]])
                             kl = masked_kl([x[mk] for x in lr_], lg).mean()
-                        loss = pg - a.ent * ent.mean() + beta * kl + 0.5 * vl
+                        loss = pg - a.ent * lm(ent) + beta * kl + 0.5 * vl
                         st = [pg.item(), vl.item(), ent.mean().item(), kl.item(), ((ratio - 1).abs() > a.clip).float().mean().item()]
                     opt.zero_grad(set_to_none=True); loss.backward(); torch.nn.utils.clip_grad_norm_(net.parameters(), 0.5); opt.step()
                     stats.append(st)

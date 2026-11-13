@@ -163,6 +163,8 @@ class Env(MAEnv):
     random weights 0-2 per battle; the transitions' reward and terms ("s_<slider>") and the episode rows include them."""
     crashes = []
     slider_scale = 1.0
+    dead_aids = set()   # agents respawning right now (host: duo / trio knock-out with a living mate, 15 s): dead(ids)
+    resp = {"out": 0, "back": 0, "wiped": 0}   # knock-outs into respawn, respawns, waits ended by the team's wipe
     record = False    # True: battles with cfg "native_ctl" put the native AI's action into the transition terms ("_act": BC labels)
 
     def _flags(self):
@@ -195,7 +197,11 @@ class Env(MAEnv):
         super()._start_battle(i, r)
         s = self.I[i]; s.hold = {}                       # player -> its final transition, held until the team's rank is known
         s.sl = slider_state(s.map_tiles, s.W, s.H, (s.cfg.get("tag") or {}).get("chr", []), self.rng)
-        s.pos = {p: (r.pl[p].x, r.pl[p].y) for p in range(10)}; s.ptick = r.tick; s.pjump = set()
+        s.pos = {p: (r.pl[p].x, r.pl[p].y) for p in range(10)}; s.ptick = r.tick; s.pjump = set(); s.wprev = set()
+
+    def dead(self, ids):
+        """(B,) bool: the agent is respawning (its observation is all zeros, its actions are ignored by the host)"""
+        return np.array([int(x) in self.dead_aids for x in ids], bool)
 
     def _finish_step(self, i, r):
         s = self.I[i]; sl = s.sl; T = slider_terms(sl, r.pl)
@@ -205,10 +211,17 @@ class Env(MAEnv):
         s.pos = {p: (r.pl[p].x, r.pl[p].y) for p in range(10)}; s.ptick = r.tick; s.pjump = {int(r.jumps[k][0]) for k in range(r.njumps)}
         g = np.array((s.cfg.get("tag") or {}).get("groups") or [0] * 10)
         if g.any(): pr, dead = player_ranks(r); b0 = s.battle   # read r before a reset reuses it
+        wait = {p for p in range(10) if r.pl[p].reserved[3] > 0}; agents = dict(s.agents); elim = {p for p in range(10) if r.pl[p].eliminated}
+        back = s.wprev - wait                            # respawned this step (or wiped out with the team)
+        self.resp["out"] += len(wait - s.wprev); self.resp["wiped"] += len(back & elim); self.resp["back"] += len(back - elim)
+        for p, aid in agents.items(): (self.dead_aids.add if p in wait else self.dead_aids.discard)(aid)
+        s.wprev = wait
         super()._finish_step(i, r)                       # may reset the instance: sl stays this battle's
         for k in range(n0, len(self._trans)):
             aid, rew, fin, t, rank = self._trans[k]; p = aid & 15
-            self._trans[k] = (aid, rew + float(extra[p]), fin, {**t, **{"s_" + m: float(v) for m, v in zip(SL, T[p])}, "_act": lab.get(p)}, rank)
+            if p in back - elim: rew -= self.w.get("hp", 0) * t["hp"]; t = {**t, "hp": 0.0}   # respawn refill is no hp gain
+            if fin: self.dead_aids.discard(aid)
+            self._trans[k] = (aid, rew + float(extra[p]), fin, {**t, **{"s_" + m: float(v) for m, v in zip(SL, T[p])}, "_act": lab.get(p), "dead": float(p in wait)}, rank)
         if g.any():                                      # duo / trio: placement = the team's (Solo Showdown underneath)
             for k in range(len(self._trans) - 1, n0 - 1, -1):
                 p = self._trans[k][0] & 15
@@ -236,7 +249,7 @@ def _check():
     from types import SimpleNamespace as NS
     def players(**over):
         pl = [NS(x=1650 + 3000 * (p % 5), y=1650 + 6000 * (p // 5), hp=3000, max_hp=4000, damage_dealt=0, bomb_damage=0, damage_taken=0,
-                 box_damage=0, cubes=0, cubes_total=0, reserved=[0, 0, p], alive=1, eliminated=0) for p in range(10)]
+                 box_damage=0, cubes=0, cubes_total=0, reserved=[0, 0, p, 0], alive=1, eliminated=0) for p in range(10)]
         for k, v in over.items(): setattr(pl[int(k[1])], k[3:], v)
         return pl
     tiles = np.full((40, 60), 27000000); bush = D.table("tiles.csv")["Forest"][0]; wall = D.table("tiles.csv")["Indestructible"][0]
@@ -273,7 +286,7 @@ def _check():
         self.I[i].battle += r.over
     env = Env.__new__(Env); env._trans, env.episodes, env.w, env.slider_scale = [], [], {"place": 5.0, "win": 3.0}, 0.0
     for groups, want in (([0] * 10, [1.0, 1.0]), ([1, 1] + [0] * 8, [1.0, 1.0 + 5 * (10 - 3) / 9 - 5 * (10 - 8) / 9])):
-        env.I = [NS(sl=sl, cfg={"tag": {"groups": groups}}, hold={}, battle=1, pos={}, ptick=0, pjump=set())]
+        env.I = [NS(sl=sl, cfg={"tag": {"groups": groups}}, hold={}, battle=1, pos={}, ptick=0, pjump=set(), agents={}, wprev=set())]
         mk = lambda fin, over, **o: NS(pl=players(**o), fin=fin, over=over, tick=1, njumps=0, jumps=[], done=0, alive=8, winner=-1)
         r1 = mk([1], 0, p1_eliminated=1); r1.pl[1].elim_rank = 8
         r2 = mk([0], 0, p0_eliminated=1, p1_eliminated=1); r2.pl[0].elim_rank = 3; r2.pl[1].elim_rank = 8
@@ -283,6 +296,17 @@ def _check():
         finally: MAEnv._finish_step = sup
         got = {a & 15: rw for a, rw, *_ in env._trans}; env._trans = []
         assert n1 == (0 if groups[0] else 1) and np.allclose([got[0], got[1]], want), (groups, n1, got)   # p1 held until p0 out
+    def fake2(self, i, r):                               # p0 steps on: its hp term is the host's hp change
+        self._trans.append((16, 2.0 * r.pl[0].hp / 1000, False, {"hp": r.pl[0].hp / 1000, "place": 0.0, "win": 0.0}, None))
+    env.w = {"hp": 2.0}; env.I = [NS(sl=sl, cfg={"tag": {"groups": [1, 1] + [0] * 8}}, hold={}, battle=1, pos={}, ptick=0, pjump=set(), agents={0: 16}, wprev=set())]
+    sup, MAEnv._finish_step = MAEnv._finish_step, fake2
+    try:
+        rw = mk([], 0, p0_hp=0); rw.pl[0].reserved[3] = 120; env._finish_step(0, rw)       # respawning: hp 0, dead
+        assert env.dead([16, 17]).tolist() == [True, False] and env._trans[-1][3]["dead"] == 1.0
+        env._finish_step(0, mk([], 0, p0_hp=4000))                                         # back with full hp
+        assert env._trans[-1][1] == 0.0 and env._trans[-1][3]["hp"] == 0.0 and not env.dead([16]).any()
+        assert env.resp == {"out": 1, "back": 1, "wiped": 0}
+    finally: MAEnv._finish_step = sup
     print("env_v5 sliders ok")
 
 
