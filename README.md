@@ -72,7 +72,7 @@ Always pass scripts on stdin; `wsl ... bash -lc '...$VAR...'` loses the quotes a
   outside the sim window |dx| < 4500, -3500 < dy < 2900 world units (a 16:9 frame likely shows more sideways than the
   sim; not measured); (2) seg `ui` -> UNKNOWN, `faded_bush` -> `bush`, `power_box` tiles -> `floor`; (3) area effects
   as one class per side (own + mates = teammate), position only; (4) slot order is free (the policy max-pools entities); (5) HP fractions
-  and ammo from the bar pixels, not from the detector.
+  and ammo from the bar pixels, not from the detector. Implemented: `adapter_v5.py` (test: `test_adapter_v5.py`, HISTORY 50).
 - Host = `~/nb68/bulletlabels/native/loader/nbhost_rl` (rl round; `nbhost_maps` is left as it was). Build:
   `cd ~/nb68/bulletlabels/native/loader && sed 's/nbhost_spawnfix2/nbhost_rl/g' build.sh | sh`. Originals of every
   file changed: `*.orig_rl` (env.c, encode.c, vendor/nbpc/instance.py, fair.py). encode.c + instance.py as a patch
@@ -204,7 +204,7 @@ vision half of this timeline is in `out/v5/HANDOFF.md` ("Timeline").
 | 16 Nov | Sim-vs-labels test (also replaces the estimated HUD mask, settles the view window) | half a day |
 | 17 Nov | Resume `s3` from `runs/s3/ckpt_last.pt` on the fixed observation; confirm it recovers its old eval numbers (owner's go first) | 6 h run |
 | 17 Nov on | Stage 2 generalist: all brawlers, all maps, teams, sliders on | 2-3 weeks (plan) |
-| with stage 2 | Bot-side adapter (vision output -> ObsV5 arrays), then the first live Trio Showdown test | 3-4 days (plan) |
+| 13 Nov (done) | Bot-side adapter `adapter_v5.py` (vision output -> ObsV5 arrays; 93 % tiles right on label truth, HISTORY 50); first live Trio Showdown test with stage 2 | done; live test 1-2 days |
 
 Checkpoints of s1-s3 are also kept read-only in `~/nb68/rl/backup_2026-11-12`. Code is on GitHub: `nirkt/nbrl-env`
 branch `rl-v5` (this folder is the git repo).
