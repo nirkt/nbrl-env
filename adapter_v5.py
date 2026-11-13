@@ -142,6 +142,12 @@ def bar_fill(img, b, side=None):
     c = np.median(p, 0)
     if side == "ammo":   # orange columns only: the empty grey-blue segment passes the generic test (HISTORY 57)
         return float(np.clip(((c[:, 0] > 150) & (c[:, 0] - c[:, 2] > 60)).mean() / AMMO_FULL, 0.0, 1.0))
+    if side == "own":   # fill (green / yellow / red) vs navy track right of it: ignores the box's background and the
+        rg = c[:, :2].max(-1)   # shield-gear icon left of the bar (live 70.757, HISTORY 57)
+        fill = (rg > 120) & (rg - c[:, 2] > 60); i = np.nonzero(fill)[0]
+        if not len(i): return 0.0
+        empty = (c[:, 2] > rg + 15) & (c[:, 2] > 60) & (np.arange(len(c)) > i[0])
+        return float(fill.sum() / (fill.sum() + empty.sum()))
     f = float(((c.max(-1) > 100) & (c.max(-1) - c.min(-1) > 60)).mean())
     if side is None: return f
     a, k = HP_CAL[side]
