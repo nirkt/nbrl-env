@@ -1,0 +1,150 @@
+diff --git a/native/loader/encode.c b/native/loader/encode.c
+index 0b307ea..3f56262 100644
+--- a/native/loader/encode.c
++++ b/native/loader/encode.c
+@@ -32,7 +32,7 @@
+ #define R_SCALE 3000.0
+ 
+ typedef struct {   /* map classes (state2.MapInfo) */
+-    int W, H; uint8_t *wall, *water, *bush;
++    int W, H; uint8_t *wall, *water, *bush, *tile;   /* tile (rl round): tiles.csv row + 1 */
+ } EncMap;
+ static const int WALL_ROWS[] = {1, 2, 3, 4, 6, 10, 12, 13, 14, 15, 16, 20, 21, 39, 40, 41, 42, 43, 44, 45, 46, 53, 54, 55, 56, 57, 58,
+                                 59, 60, 61, 62, 63, 65, 66, 69, 70, 71, 72, 73};
+@@ -40,10 +40,10 @@ static const int WATER_ROWS[] = {9, 11, 18};
+ static const int BUSH_ROWS[] = {7, 8, 17, 68};
+ static int in_rows(int id, const int *rows, int n) { for (int i = 0; i < n; i++) if (id == 27000000 + rows[i]) return 1; return 0; }
+ void enc_map_build(EncMap *m, const int32_t *tiles, int W, int H) {
+-    free(m->wall); free(m->water); free(m->bush);
+-    m->W = W; m->H = H; m->wall = calloc(W * H, 1); m->water = calloc(W * H, 1); m->bush = calloc(W * H, 1);
++    free(m->wall); free(m->water); free(m->bush); free(m->tile);
++    m->W = W; m->H = H; m->tile = calloc(W * H, 1); m->wall = calloc(W * H, 1); m->water = calloc(W * H, 1); m->bush = calloc(W * H, 1);
+     for (int i = 0; i < W * H; i++) {
+-        int id = tiles[i];
++        int id = tiles[i]; m->tile[i] = id >= 27000000 && id < 27000254 ? id - 27000000 + 1 : 1;
+         m->wall[i] = in_rows(id, WALL_ROWS, sizeof WALL_ROWS / 4);
+         m->water[i] = in_rows(id, WATER_ROWS, sizeof WATER_ROWS / 4);
+         m->bush[i] = in_rows(id, BUSH_ROWS, sizeof BUSH_ROWS / 4);
+@@ -55,6 +55,7 @@ typedef struct {
+     const int32_t (*cubes)[2]; int ncubes;      /* [char id, n] */
+     const int32_t (*jumps)[5]; int njumps;      /* [char id, t, T, x1, y1] */
+     const PrevPos *prev; int nprev, prev_tick;  /* previous dump's character positions (velocities) */
++    int hyper[16], hmax[16];                    /* rl round: hypercharge charge / max per player index */
+ } EncState;
+ 
+ static int floordiv(int a, int b) { int q = a / b; if ((a % b != 0) && ((a < 0) != (b < 0))) q--; return q; }
+@@ -72,6 +73,7 @@ static int is_brawler(const EncState *s, const int32_t *r) {
+     }
+     return r[0] == ((p[3] && p[3] != (int32_t)0x80000000) ? p[3] : p[2]);
+ }
++static int team_of(const EncState *s, int pidx) { for (int i = 0; i < s->npl; i++) if (s->pl[i * P2] == pidx) return s->pl[i * P2 + 1]; return -1000 - pidx; }
+ static int cubes_of(const EncState *s, int id) { for (int i = 0; i < s->ncubes; i++) if (s->cubes[i][0] == id) return s->cubes[i][1]; return 0; }
+ static int jumping(const EncState *s, int id) { for (int i = 0; i < s->njumps; i++) if (s->jumps[i][0] == id) return 1; return 0; }
+ static double super_frac(const EncState *s, int pidx) {
+@@ -123,20 +125,24 @@ int enc_encode(const EncMap *m, const EncState *s, int pidx, float *vec, float *
+         cd / 600.0, super_frac(s, pidx), cub / 10.0, me[11] > 0 ? 1.0 : 0.0,
+         (double)map_at(m, m->bush, tx, ty), (double)in_gas((int)mx, (int)my, tick, W, H), mx / (W * TILE), my / (H * TILE),
+         vx / 40.0, vy / 40.0, z / 700.0, jumping(s, mid) ? 1.0 : 0.0,
+-        (tick < 3000 ? tick : 3000) / 3000.0, nalive / 10.0, gas_step(tick) / 30.0, gas_next(tick) / 440.0,
++        (tick < 3000 ? tick : 3000) / 3000.0, nalive / 10.0,
++        /* rl round: [18] was gas_step / 30 -> the hypercharge fraction */
++        pidx >= 0 && pidx < 16 && s->hmax[pidx] > 0 ? (double)s->hyper[pidx] / s->hmax[pidx] : 0.0, gas_next(tick) / 440.0,
+         (W * TILE / 2.0 - mx) / (W * TILE / 2.0), (H * TILE / 2.0 - my) / (H * TILE / 2.0)};
+     for (int i = 0; i < F_SELF; i++) vec[i] = (float)fs[i];
+     float *o = vec + F_SELF;
+-    /* enemies */
+-    static Row rows[4096]; int n = 0;
++    /* other brawlers; rl round: + summons (characters of a player that are not its brawler), [14] = summon, [15] = on my team
++     * (were: last hit by me, is Piper) */
++    static Row rows[4096]; int n = 0; int myteam = team_of(s, pidx);
+     for (int k = 0; k < s->nch && n < 4096; k++) {
+         const int32_t *r = s->ch + k * C2;
+-        if (!is_brawler(s, r) || r[2] == pidx || r[6] <= 0) continue;
++        int br = is_brawler(s, r);
++        if (r[18] != 0 || r[1] == BOX_ID || r[2] < 0 || r[6] <= 0 || (br && r[2] == pidx)) continue;
+         double dx = (r[3] - mx) / R_SCALE, dy = (r[4] - my) / R_SCALE, ex, ey; vel_of(s, r[0], &ex, &ey);
+         int etx = floordiv(r[3], TILE), ety = floordiv(r[4], TILE), ea = r[13] > 0 ? r[13] : 0, ec = cubes_of(s, r[0]); if (ec > 10) ec = 10;
+         double v[16] = {1.0, dx, dy, ex / 40.0, ey / 40.0, (double)r[6] / (r[7] > 1 ? r[7] : 1), r[6] / 10000.0, ea / 3000.0,
+                         super_frac(s, r[2]), ec / 10.0, (double)map_at(m, m->bush, etx, ety), r[19] == 1, r[11] > 0,
+-                        jumping(s, r[0]), r[16] == pidx, r[1] == SNIPER};
++                        jumping(s, r[0]), !br, team_of(s, r[2]) == myteam};
+         rows[n].key = dx * dx + dy * dy; rows[n].seq = n; for (int j = 0; j < 16; j++) rows[n].v[j] = (float)v[j]; n++;
+     }
+     qsort(rows, n, sizeof *rows, cmprow);
+@@ -177,7 +183,9 @@ int enc_encode(const EncMap *m, const EncState *s, int pidx, float *vec, float *
+     for (int k = 0; k < s->nit && n < 4096; k++) {
+         const int32_t *r = s->it + k * I2;
+         double dx = (r[3] - mx) / R_SCALE, dy = (r[4] - my) / R_SCALE;
+-        double v[6] = {1.0, dx, dy, (double)(r[1] == CUBE_ITEM), (double)(r[1] == BOMB_ITEM || r[1] == BOMB_BOX_ITEM), (r[5] > 0 ? r[5] : 0) / 1500.0};
++        /* rl round: [4] = 1 showdown bomb or enemy area effect (data 17xxxxxx = area_effects_skin), -1 area effect of my team */
++        int area = r[1] / 1000000 == 17, mine = area && r[2] >= 0 && team_of(s, r[2]) == myteam;
++        double v[6] = {1.0, dx, dy, (double)(r[1] == CUBE_ITEM), mine ? -1.0 : (double)(area || r[1] == BOMB_ITEM || r[1] == BOMB_BOX_ITEM), (r[5] > 0 ? r[5] : 0) / 1500.0};
+         rows[n].key = dx * dx + dy * dy; rows[n].seq = n; for (int j = 0; j < 6; j++) rows[n].v[j] = (float)v[j]; n++;
+     }
+     qsort(rows, n, sizeof *rows, cmprow);
+@@ -188,7 +196,7 @@ int enc_encode(const EncMap *m, const EncState *s, int pidx, float *vec, float *
+         int x = tx - half + gx, y = ty - half + gy, inside = x >= 0 && x < W && y >= 0 && y < H;
+         int cx = x < 0 ? 0 : x > W - 1 ? W - 1 : x, cy = y < 0 ? 0 : y > H - 1 ? H - 1 : y, i = cy * W + cx;
+         int a = cx < cy ? cx : cy, b = W - 1 - cx < H - 1 - cy ? W - 1 - cx : H - 1 - cy, gas = (a < b ? a : b) < st;
+-        grid[0 * 625 + gy * 25 + gx] = m->wall[i] && inside;
++        grid[0 * 625 + gy * 25 + gx] = inside ? m->tile[i] : 0;   /* rl round: tiles.csv row + 1 (was: wall) */
+         grid[1 * 625 + gy * 25 + gx] = m->water[i] && inside;
+         grid[2 * 625 + gy * 25 + gx] = m->bush[i] && inside;
+         grid[3 * 625 + gy * 25 + gx] = gas || !inside;
+diff --git a/vendor/nbpc/instance.py b/vendor/nbpc/instance.py
+index b0c69ae..2b2583f 100644
+--- a/vendor/nbpc/instance.py
++++ b/vendor/nbpc/instance.py
+@@ -15,8 +15,9 @@ NATIVE = os.path.join(WORK, "native")
+ NBHOST = os.environ.get("NBHOST_BIN", os.path.join(NATIVE, "prebuilt", "nbhost_spawnfix"))
+ _gl = os.path.join(NATIVE, "glhost", "nbgl")
+ NBGL = os.environ.get("NBGL_BIN", _gl if os.path.exists(_gl) else os.path.join(NATIVE, "prebuilt", "nbgl"))
+-PAYLOADS = os.path.join(NATIVE, "payloads")
++PAYLOADS = os.environ.get("NBPC_PAYLOADS") or os.path.join(NATIVE, "payloads")   # run_plan: per-batch copy with our random name
+ APK = os.environ.get("NBHOST_APK", os.path.join(WORK, "game"))
++APK_BY_IDX = {}   # rl round: instance index -> its own game dir (generated maps: framegen/genmap.py OUT/game)
+ 
+ 
+ class InstanceDead(RuntimeError):
+@@ -37,6 +38,10 @@ def set_div(d, div):
+     d.setup_super_mask = int(div.get("setup_super_mask") or 0) & 0xffffffff
+     d.setup_unprotect_mask = int(div.get("setup_unprotect_mask") or 0) & 0xffffffff
+     for i in range(2): d.reserved[i] = 0
++    d.reserved[0] = int(div.get("team_mask") or 0)   # RESET: bit i = player i on player 0's team (needs native/loader/nbhost_team)
++    g = div.get("team_groups")   # rl round: group id 0-7 per player (0 = alone); players of one group share a team
++    if g: d.reserved[0] = ((1 << 31) | sum((int(x) & 7) << (3 * i) for i, x in enumerate(list(g)[:10]))) - (1 << 32)
++    d.reserved[1] = int(div.get("map_location") or 0)   # RESET: a location (any mode) whose map layout is used (needs native/loader/nbhost_maps)
+ 
+ 
+ QEMU_NB = os.path.join(NATIVE, "qemu", "bin", "qemu-aarch64-nb")
+@@ -110,7 +115,7 @@ class Instance:
+         qemu, env = qemu_cmd_env()
+         # pctrain: game processes run at a lower CPU priority (NBENV_NICE, default 10) so the desktop stays responsive
+         nice = ["nice", "-n", os.environ.get("NBENV_NICE", "10")] if os.environ.get("NBENV_NICE", "10") != "0" else []
+-        args = os.environ.get("NBHOST_WRAP", "").split() + nice + ["unshare", "-rn", qemu, NBHOST, "--libs", os.path.join(APK, "lib", "arm64-v8a"), "--assets", APK,
++        args = os.environ.get("NBHOST_WRAP", "").split() + nice + ["unshare", "-rn", qemu, NBHOST, "--libs", os.path.join(APK_BY_IDX.get(self.idx, APK), "lib", "arm64-v8a"), "--assets", APK_BY_IDX.get(self.idx, APK),
+                 "--payloads", PAYLOADS, "--stage", "boot", "--dpi", "280", "--xdpi", "409.432", "--ydpi", "406.4", "--safe-margins", "0,0,88,0", "--cores", str(self.cores), "--fast",
+                 "--autoplay", "3", "--run-seconds", "100000000", "--env", self.path, "--steps-per-frame", str(self.spf)]
+         if self.gl_shm:
+@@ -230,6 +235,7 @@ class Instance:
+         return self.hdr.resp_seq == self.seq
+ 
+     def wait(self, timeout=60.0):
++        timeout = max(timeout, float(os.environ.get("NBPC_TIMEOUT") or 0))   # run_plan: intros are slow with several instances
+         t0 = time.time(); n = 0
+         while self.hdr.resp_seq != self.seq:
+             n += 1
+@@ -282,11 +288,11 @@ class Instance:
+                   obs_mask=obs_mask, actions=actions, gas=(storm + 1) if storm is not None else 0, pix=pix, pix_obs=pix_obs)
+         return self.wait(timeout)
+ 
+-    def setup(self, positions=None, ai_off=(), super_fill=(), unprotect=()):
++    def setup(self, positions=None, ai_off=(), super_fill=(), unprotect=(), hyper_fill=()):
+         """phone test harness (debug_js_tick): teleport/stop/heal players {i: (x, y)}, clear the AI flag of players ai_off;
+         super_fill (diversity round): fill these players' super charge; applied inside the next tick (send steps afterwards)"""
+         c = self.cmd; c.set_mask = 0; c.ai_off_mask = 0
+-        set_div(c.div, {"setup_super_mask": sum(1 << int(i) for i in super_fill), "setup_unprotect_mask": sum(1 << int(i) for i in unprotect)})
++        set_div(c.div, {"setup_super_mask": sum(1 << int(i) for i in super_fill) | sum(1 << (16 + int(i)) for i in hyper_fill), "setup_unprotect_mask": sum(1 << int(i) for i in unprotect)})
+         for i, (x, y) in (positions or {}).items():
+             c.set_mask |= 1 << i; c.set_x[i] = int(x); c.set_y[i] = int(y)
+         for i in ai_off:

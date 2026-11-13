@@ -69,7 +69,8 @@ Always pass scripts on stdin; `wsl ... bash -lc '...$VAR...'` loses the quotes a
   and ammo from the bar pixels, not from the detector.
 - Host = `~/nb68/bulletlabels/native/loader/nbhost_rl` (rl round; `nbhost_maps` is left as it was). Build:
   `cd ~/nb68/bulletlabels/native/loader && sed 's/nbhost_spawnfix2/nbhost_rl/g' build.sh | sh`. Originals of every
-  file changed: `*.orig_rl` (env.c, encode.c, vendor/nbpc/instance.py, fair.py). Changes: `div["team_groups"]`
+  file changed: `*.orig_rl` (env.c, encode.c, vendor/nbpc/instance.py, fair.py). encode.c + instance.py as a patch
+  against bulletlabels 52184b2: `host/bulletlabels_rl.patch` (`git apply` in `~/nb68/bulletlabels`). Changes: `div["team_groups"]`
   (group 0-7 per player, 0 = alone); state2 enemy rows now include summons, feature 14 = summon, 15 = on my team
   (were: last hit by me, is Piper); self 18 = hypercharge fraction (was gas step); grid channel 0 = tiles.csv
   row + 1 (was wall 0/1); `Player.reserved` = hypercharge, its max, team; fair.py never bush-hides teammates;
