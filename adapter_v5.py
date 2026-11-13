@@ -129,6 +129,7 @@ def grid(seg, anc, phase, c, behind_unknown=False):
 
 # HP truth fit (calib_bars.py, HISTORY 54: 969 GL-captured frames with the state dump, 8253 bars): hp = a * read + b.
 # MAE enemy 0.204 -> 0.125, mate 0.127 -> 0.084, own 0.118 -> 0.043; ammo reads right uncorrected (MAE 0.058)
+AMMO_FULL = 0.75   # orange share of a full live ammo box (box padding), 70.757 frames (HISTORY 57)
 HP_CAL = {"enemy": (0.980, 0.182), "mate": (1.019, 0.074), "own": (1.080, 0.047)}
 
 
@@ -139,6 +140,8 @@ def bar_fill(img, b, side=None):
     p = img[max(y1, 0):max(y2, y1 + 1), max(x1, 0):max(x2, x1 + 1)].astype(int)
     if not p.size: return 0.0
     c = np.median(p, 0)
+    if side == "ammo":   # orange columns only: the empty grey-blue segment passes the generic test (HISTORY 57)
+        return float(np.clip(((c[:, 0] > 150) & (c[:, 0] - c[:, 2] > 60)).mean() / AMMO_FULL, 0.0, 1.0))
     f = float(((c.max(-1) > 100) & (c.max(-1) - c.min(-1) > 60)).mean())
     if side is None: return f
     a, k = HP_CAL[side]
@@ -163,7 +166,7 @@ class Adapter:
             hb = det[cls == _D("player_health")]
             if len(hb): s[0] = bar_fill(img, hb[0], "own")
             am = det[cls == _D("player_ammo")]
-            if len(am): s[1] = np.mean([bar_fill(img, b) for b in am])
+            if len(am): s[1] = np.mean([bar_fill(img, b, "ammo") for b in am])
         s[2], s[3], s[4] = has("super_ready"), has("gadget_ready"), has("hypercharge_ready")
         s[5] = g[G // 2, G // 2] == SEG.index("bush")
         s[6:8] = own_vel

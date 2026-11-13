@@ -53,7 +53,7 @@ def fill_right(img, b, share=0.3):
     return float((np.nonzero(col)[0].max() + 1) / len(col)) if col.any() else 0.0
 
 
-READ = {"bar_fill": A.bar_fill, "right": fill_right}
+READ = {"bar_fill": A.bar_fill, "right": fill_right, "ammo_side": lambda im, b: A.bar_fill(im, b, "ammo")}
 
 
 def main():
