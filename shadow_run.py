@@ -76,7 +76,7 @@ def live(ck, out, detp, segp, fdir, ovl=None):
         o = ad(seg, det, rgb)
         a, pm, pf, h = step(net, o, h, COND[None])
         rows.append({"self": o["self"], "ent": o["ent"], "grid": o["grid"], "act": a, "pmove": pm, "pfire": pf,
-                     "name": np.array([os.path.basename(f)]), "player": np.array([(det[:, 0] == A.DET.index("player")).sum()])})
+                     "name": np.array([os.path.basename(f)]), "player": np.array([(det[:, 0] == A.DET.index("player")).sum()]), "battle": np.array([o["battle"]])})
         if ovl:   # move arrow (cyan) + aim ray if firing (red: attack, yellow: super) from the screen centre
             d = ImageDraw.Draw(im); cx, cy = 480, 300; mv, fi, aim = int(a[0, 0]), int(a[0, 1]), float(a[0, 2])
             if mv: t = np.deg2rad((mv - 1) * 22.5); d.line([cx, cy, cx + 80 * np.cos(t), cy + 80 * np.sin(t)], fill=(0, 255, 255), width=4)
@@ -110,13 +110,13 @@ def report(simp, *livep):
             mv[0], np.round(mv[1:], 2).tolist(), np.round(fi, 2).tolist(), d["pmove"].max(1).mean()))
     stats(S, "sim " + simp)
     for p, d in zip(livep, L):
-        k = d["self"][:, 0] > 0; stats({x: v[k] for x, v in d.items()}, "live %s, own-HP-bar frames only (%d of %d)" % (p, k.sum(), len(k)))
+        k = d["battle"]; stats({x: v[k] for x, v in d.items()}, "live %s, battle frames only (%d of %d)" % (p, k.sum(), len(k)))
     for p, d in zip(livep, L):
         print("-- per frame %s" % p)
         for k in range(len(d["act"])):
             a = d["act"][k]; e = d["ent"][k]; ne = int(e[:, 0].sum()); nen = int(((e[:, 0] > .5) & (e[:, 1] > .5)).sum())
-            print("  %s pl %d ents %d enemies %d hp %.2f ammo %.2f bush %d | move %s fire %d aim %d" % (
-                d["name"][k], d["player"][k], ne, nen, d["self"][k, 0], d["self"][k, 1], d["self"][k, 5],
+            print("  %s %s pl %d ents %d enemies %d hp %.2f ammo %.2f bush %d | move %s fire %d aim %d" % (
+                d["name"][k], "B" if d["battle"][k] else "-", d["player"][k], ne, nen, d["self"][k, 0], d["self"][k, 1], d["self"][k, 5],
                 'stop' if not a[0] else int((a[0] - 1) * 22.5), a[1], a[2]))
 
 

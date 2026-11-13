@@ -164,6 +164,13 @@ def bar_fill(img, b, side=None):
     return f
 
 
+def in_battle(det):
+    """our own brawler is on the field and ours to steer: own HP bar + a joystick. False on lobby / end screens (det can box
+    portraits as player), death spectate (another brawler's bar, no joysticks) and the respawn countdown (HISTORY 58)"""
+    c = np.asarray(det).reshape(-1, 5)[:, 0].astype(int)
+    return bool((c == _D("player_health")).any() and np.isin(c, [_D("movement_joystick"), _D("attack_joystick")]).any())
+
+
 class Adapter:
     def __init__(self, behind_unknown=False):
         self.behind_unknown, self.prev, self.phase = behind_unknown, None, (0.0, 0.0)
@@ -183,7 +190,7 @@ class Adapter:
             if len(hb): s[0] = bar_fill(img, hb[0], "own")
             am = det[cls == _D("player_ammo")]
             if len(am): s[1] = np.mean([bar_fill(img, b, "ammo") for b in am])
-        s[2], s[3], s[4] = has("super_ready"), has("gadget_ready"), has("hypercharge_ready")
+        s[2] = has("super_ready")   # shortcut: gadget / hypercharge (s[3], s[4]) stay 0, the sim never sets them (HISTORY 58); read them once the host dumps them
         s[5] = g[G // 2, G // 2] == SEG.index("bush")
         s[6:8] = own_vel
         ent = np.zeros((N_ENT, F_ENT), np.float32)
@@ -209,6 +216,7 @@ class Adapter:
                 for i, c in enumerate(e[:, 0]):
                     bar, side = {_D("enemy"): ("enemy_health", "enemy"), _D("teammate"): ("teammate_health", "mate")}.get(int(c), (None, None))
                     hb = det[cls == _D(bar)] if bar else det[:0]
+                    if bar: ent[i, HP] = 1.0   # no bar matched: full (sim brawlers always have a bar, mean 0.92; HISTORY 58)
                     if len(hb):
                         bx, by = (e[i, 1] + e[i, 3]) / 2, e[i, 2]
                         k_ = np.argmin(np.abs((hb[:, 1] + hb[:, 3]) / 2 - bx) + np.abs(hb[:, 4] - by))
@@ -216,4 +224,4 @@ class Adapter:
             self.prev = (ec, dx, dy)
         else:
             self.prev = (np.zeros(0, int), np.zeros(0), np.zeros(0))
-        return {"self": s[None], "ent": ent[None], "grid": g[None]}
+        return {"self": s[None], "ent": ent[None], "grid": g[None], "battle": in_battle(det)}
