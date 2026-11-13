@@ -127,15 +127,22 @@ def grid(seg, anc, phase, c, behind_unknown=False):
     return g
 
 
-# HP truth fit (calib_bars.py, HISTORY 54: 969 GL-captured frames with the state dump, 8253 bars): hp = a * read + b.
-# MAE enemy 0.204 -> 0.125, mate 0.127 -> 0.084, own 0.118 -> 0.043; ammo reads right uncorrected (MAE 0.058)
+# HP bars: own / mate / enemy all read fill vs the grey-blue track right of it (the HISTORY 54 linear HP_CAL fit was
+# dropped: live 70.757 backgrounds pass the generic test, HISTORY 57); ammo reads orange columns only
 AMMO_FULL = 0.75   # orange share of a full live ammo box (box padding), 70.757 frames (HISTORY 57)
-HP_CAL = {"enemy": (0.980, 0.182), "mate": (1.019, 0.074), "own": (1.080, 0.047)}
+FILL = {"enemy": lambda p: (p[..., 0] > 150) & (p[..., 0] - p[..., 1] > 60) & (p[..., 0] - p[..., 2] > 50),   # red / orange
+        "mate": lambda p: (p[..., 2] > 150) & (p[..., 1] > 130) & (p[..., 0] < 130)}   # cyan
+
+
+def band(p, side):
+    """median of the 3 rows with the most fill pixels (the bar line, not the digits / background above it)"""
+    r = int(FILL[side](p).sum(1).argmax())
+    return np.median(p[max(r - 1, 0):r + 2], 0)
 
 
 def bar_fill(img, b, side=None):
     """filled fraction of a bar = share of columns whose median pixel is bright and saturated (fill colour vs the dark
-    empty part); side ('own' / 'mate' / 'enemy') = an HP bar: apply its HP_CAL fit"""
+    empty part); side ('own' / 'mate' / 'enemy' / 'ammo') = that bar's reader"""
     x1, y1, x2, y2 = (int(round(t)) for t in b[1:5])
     p = img[max(y1, 0):max(y2, y1 + 1), max(x1, 0):max(x2, x1 + 1)].astype(int)
     if not p.size: return 0.0
@@ -148,10 +155,13 @@ def bar_fill(img, b, side=None):
         if not len(i): return 0.0
         empty = (c[:, 2] > rg + 15) & (c[:, 2] > 60) & (np.arange(len(c)) > i[0])
         return float(fill.sum() / (fill.sum() + empty.sum()))
+    if side in FILL:   # fill vs grey-blue track right of it, on the bar line (live 70.757, HISTORY 57)
+        c = band(p, side); fill = FILL[side](c); i = np.nonzero(fill)[0]
+        if not len(i): return 0.0
+        empty = ~fill & (c[:, 2] > c[:, 0] + 15) & (c[:, 2] > 60) & (np.arange(len(c)) > i[0])
+        return float(fill.sum() / (fill.sum() + empty.sum()))
     f = float(((c.max(-1) > 100) & (c.max(-1) - c.min(-1) > 60)).mean())
-    if side is None: return f
-    a, k = HP_CAL[side]
-    return float(np.clip(a * f + k, 0.0, 1.0))
+    return f
 
 
 class Adapter:

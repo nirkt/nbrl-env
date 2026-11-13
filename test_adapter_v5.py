@@ -92,7 +92,7 @@ def main():
                 perc[b][SEG[cl]]["unk"] += (q & (g == UNKNOWN)).sum()
     pe = np.array(pherr)
     print(f"frames {len(names) - skipped} (skipped, no player box or map: {skipped}); zoom error median {np.median(zerr):.0f}, p90 {np.percentile(zerr, 90):.0f}; shift spread +-8 tiles median {np.median(resid):.0f}, p90 {np.percentile(resid, 90):.0f} units")
-    print(f"Adapter(): entities per frame mean {np.mean(nent):.1f}, own HP bar read (HP_CAL) median {np.median(hp):.2f}")
+    print(f"Adapter(): entities per frame mean {np.mean(nent):.1f}, own HP bar read median {np.median(hp):.2f}")
     print(f"player box bottom v: median {np.median(pv):.1f} px, p10-p90 {np.percentile(pv, 10):.0f}-{np.percentile(pv, 90):.0f}")
     print(f"tile phase error x/y: median {np.median(pe[:, 0]):.1f}/{np.median(pe[:, 1]):.1f}, p95 {np.percentile(pe[:, 0], 95):.0f}/{np.percentile(pe[:, 1], 95):.0f}, >75 units {(pe > 75).any(1).mean():.1%} of frames")
     for b in (False, True):
