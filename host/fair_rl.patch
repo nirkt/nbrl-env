@@ -1,0 +1,20 @@
+--- fair.py.orig_rl	2026-11-11 17:00:09.281371834 -0800
++++ fair.py	2026-11-13 12:23:07.294177678 -0800
+@@ -21,7 +21,7 @@
+ PJ0, PJ_K, PJ_F = EN0 + EN_K * EN_F, 16, 12
+ BX0, BX_K, BX_F = PJ0 + PJ_K * PJ_F, 6, 5
+ IT0, IT_K, IT_F = BX0 + BX_K * BX_F, 8, 6
+-VIEW_X, VIEW_UP, VIEW_DOWN, BUSH_REVEAL = 4500.0, 3500.0, 2900.0, 900.0
++VIEW_X, VIEW_UP, VIEW_DOWN, BUSH_REVEAL = 3800.0, 3350.0, 2070.0, 900.0   # view: measured on the v5 labels (rl sim_vs_labels.py, HISTORY 53; was 4500 / 3500 / 2900 guessed)
+ 
+ 
+ def own_xy(vec, W, H):
+@@ -54,7 +54,7 @@
+     en = vec[:, EN0:EN0 + EN_K * EN_F].reshape(-1, EN_K, EN_F)
+     inv, _, _ = _inview(mx, my, en[:, :, 1], en[:, :, 2], W)
+     dist = np.hypot(en[:, :, 1].astype(np.float64), en[:, :, 2].astype(np.float64)) * R
+-    hidden = (en[:, :, 10] > 0.5) & (dist > BUSH_REVEAL)
++    hidden = (en[:, :, 10] > 0.5) & (dist > BUSH_REVEAL) & (en[:, :, 15] < 0.5)   # rl round: [15] = on my team, never hidden
+     return (en[:, :, 0] > 0.5) & inv & ~hidden
+ 
+ 

@@ -67,10 +67,9 @@ Always pass scripts on stdin; `wsl ... bash -lc '...$VAR...'` loses the quotes a
   tiles, box size. Noisy path only: entity velocity = differenced noisy positions (0 on first sight / after a drop,
   matched to the last decision by class within 1 tile), tiles under the HUD UNKNOWN with their measured chance
   (`hud_mask`, `hud_ui.npy` from `sim_vs_labels.py`, HISTORY 53: at most 50 %, 51 tile bins). Bot-side adapter:
-  `adapter_v5.py` (HISTORY 50). Sim-vs-labels test: `sim_vs_labels.py` (view window / wall bleed proposals open, HISTORY 53).
+  `adapter_v5.py` (HISTORY 50). Sim-vs-labels test: `sim_vs_labels.py` (view window + wall bleed applied, HISTORY 56).
 - Adapter contract (what the bot-side adapter must do so the real game matches `ObsV5`): (1) drop detections
-  outside the sim window |dx| < 4500, -3500 < dy < 2900 world units (a 16:9 frame likely shows more sideways than the
-  sim; not measured); (2) seg `ui` -> UNKNOWN, `faded_bush` -> `bush`, `power_box` tiles -> `floor`; (3) area effects
+  outside the sim window |dx| < 3800, -3350 < dy < 2070 world units (measured, HISTORY 53 / 56); (2) seg `ui` -> UNKNOWN, `faded_bush` -> `bush`, `power_box` tiles -> `floor`; (3) area effects
   as one class per side (own + mates = teammate), position only; (4) slot order is free (the policy max-pools entities); (5) HP fractions
   and ammo from the bar pixels, not from the detector. Implemented: `adapter_v5.py` (test: `test_adapter_v5.py`, HISTORY 50).
 - Host = `~/nb68/bulletlabels/native/loader/nbhost_rl` (rl round; `nbhost_maps` is left as it was). Build:

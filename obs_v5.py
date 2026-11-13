@@ -39,7 +39,16 @@ NOISE = {"jitter": (0.0, 0.03),    # box centre sigma, 10-tile units (0.03 = 0.3
          "drop": (0.0, 0.10),      # chance per entity and decision that it is not detected
          "fp": (0.0, 0.01),        # chance per empty slot and decision of a false detection
          "seg": (0.0, 0.03),       # chance per visible tile and decision of a wrong class
-         "latency": (1, 2)}        # decisions between the frame and the action (inclusive)
+         "latency": (1, 2),        # decisions between the frame and the action (inclusive)
+         "bleed": (0.5, 1.5)}      # per-episode factor on the measured wall-bleed chance (BLEED_ROW x BLEED_CLS)
+
+# wall bleed, measured (sim_vs_labels.py, HISTORY 53): the adapter reads a not-tall tile right behind (row - 1) a tall one
+# as that tall tile with chance row factor (by grid row = ry bin + 12) x front-class factor; out_of_bounds never bleeds
+BLEED_ROW = np.array([.6, .6] + [.4] * 4 + [.25] * 4 + [.11] * 7 + [.6] * 8, np.float32)   # rows -12..+12
+_TALL = ("indestructible", "destructible_wall", "fragile_wall", "bush", "faded_bush", "rope_fence", "destructible")
+_TALL_M = np.isin(np.arange(len(SEG) + 1), [SEG.index(n) for n in _TALL])                         # index UNKNOWN: False
+_BLEED_CLS = np.array([{"indestructible": 1.3, "destructible_wall": 1.1, "bush": .8, "destructible": .2, "rope_fence": .2}.get(n, 1.0)
+                       for n in SEG] + [0.0], np.float32)
 
 
 @functools.lru_cache(None)
@@ -142,12 +151,12 @@ class ObsV5:
         self.noise, self.rng, self.ep, self.ticks = noise, np.random.default_rng(seed), {}, ticks   # ticks per decision (Env)
 
     def _episode(self, aid):
-        """agent id -> [jitter, drop, fp, seg, latency, frames, last decision's detections]"""
+        """agent id -> [jitter, drop, fp, seg, latency, frames, last decision's detections, bleed factor]"""
         e = self.ep.get(aid)
         if e is None:
             n, r = self.noise, self.rng
             e = self.ep[aid] = [r.uniform(*n["jitter"]), r.uniform(*n["drop"]), r.uniform(*n["fp"]), r.uniform(*n["seg"]),
-                                int(r.integers(n["latency"][0], n["latency"][1] + 1)), [], None]
+                                int(r.integers(n["latency"][0], n["latency"][1] + 1)), [], None, r.uniform(*n.get("bleed", (0, 0)))]
             if len(self.ep) > 4096:   # shortcut: ended episodes are never reported here, so drop the oldest half
                 for k in list(self.ep)[:2048]: del self.ep[k]
         return e
@@ -173,6 +182,11 @@ class ObsV5:
             row[:, HP] = r.random(n)
             ent[false] = row
         hud = hud_mask(meta, r); g[hud] = UNKNOWN          # the seg model labels the HUD controls 'ui'
+        bl = np.array([e[7] for e in eps], np.float32)
+        front = np.full_like(g, UNKNOWN); front[:, :-1] = g[:, 1:]
+        bleed = ~_TALL_M[g] & (g != _S("out_of_bounds")) & (g != UNKNOWN) & _TALL_M[front]
+        bleed &= r.random(g.shape) < BLEED_ROW[None, :, None] * _BLEED_CLS[front] * bl[:, None, None]
+        g[bleed] = front[bleed]
         wrong = (g != UNKNOWN) & (r.random(g.shape) < seg[:, None, None])
         g[wrong] = r.integers(len(SEG), size=int(wrong.sum()))
         # velocity as the bot gets it: the difference of two noisy detections, 0 for one not matched to the last decision
@@ -252,10 +266,10 @@ def _check():
     assert (g[12, 13], g[12, 14], g[5, 5], g[3, 3], g[12, 12]) == (_S("indestructible"), _S("bush"), _S("poison"),
                                                                  _S("out_of_bounds"), _S("floor"))
     assert (g[12, 15], g[12, 16], g[12, 17]) == (_S("destructible_wall"), _S("water"), _S("rope_fence"))
-    assert (g[0] == UNKNOWN).all() and (g[1] != UNKNOWN).all() and (g[21] != UNKNOWN).all() and (g[22:] == UNKNOWN).all()
-    assert (g[1:22] != UNKNOWN).all()                          # +-12 tiles is inside the +-15 tile view mid-map
-    g1 = o["grid"][1]                                          # x = 150: camera centred 10 tiles right, sees x > -1500
-    assert (g1[5, :7] == UNKNOWN).all() and (g1[5, 7:] != UNKNOWN).all()
+    assert (g[0] == UNKNOWN).all() and (g[1] != UNKNOWN).all() and (g[18] != UNKNOWN).all() and (g[19:] == UNKNOWN).all()   # view -3350..+2070
+    assert (g[1:19] != UNKNOWN).all()                          # +-12 tiles is inside the +-12.7 tile view mid-map
+    g1 = o["grid"][1]                                          # x = 150: camera centred 10 tiles right, sees x > -800
+    assert (g1[5, :9] == UNKNOWN).all() and (g1[5, 9:] != UNKNOWN).all()
 
     ids = np.array([16, 17])
     clean = ObsV5(noise=None).build(vec, grid, meta, ids)
