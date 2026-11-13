@@ -1,0 +1,109 @@
+"""Policy for the ObsV5 observation: entity set + seg-class grid + self / conditioning vector -> GRU -> heads.
+
+    net = Policy(); logits, v, h = net(s, ent, grid, h)      # one decision; s = cat[self (8), cond (26)], h (B, HID)
+    logits, v = net.seq(s, ent, grid, h0)                     # (N, L, ...) chunks from stored h0 -> flat (N * L) outputs
+    logits = move 17 | fire 3 (none / attack / super) | aim 360 (pointer over visible enemies / boxes + free) | distance 8
+
+    python -m model      # self-check (CPU, no game)
+shortcut: no per-brawler adapter yet (stage 1 is Piper only); add the embedding + per-brawler head for stage 2.
+The critic also gets `priv` (PRIV = 40: every player's true offset, hp, alive; train_ppo.priv) through a zero-initialised
+branch, so the policy heads never see it and old checkpoints load with strict=False.
+"""
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import obs_v5 as O
+from models4 import UnfoldConv2d, dist_logp_ent      # nirkt (MIOpen-safe conv; masked log-prob / entropy / sampling)
+
+NVEC, HID, PRIV = [17, 3, 360, 8], 256, 40
+_CAND = list(range(0, 9)) + list(range(25, 31))       # ent slots that can be aimed at: the enemy block + the power boxes
+_FOE = [1 + O.ENT.index(c) for c in ("enemy", "enemy_summon", "power_box")]
+
+
+class Policy(nn.Module):
+    def __init__(self, d=512):
+        super().__init__()
+        self.emb = nn.Embedding(O.UNKNOWN + 1, 8)
+        self.grid = nn.Sequential(UnfoldConv2d(8, 32, 3, 2, 1), nn.ReLU(), UnfoldConv2d(32, 64, 3, 2, 1), nn.ReLU(),
+                                  nn.Flatten(), nn.Linear(64 * 7 * 7, 256), nn.ReLU())
+        self.ent = nn.Sequential(nn.Linear(O.F_ENT, 128), nn.ReLU(), nn.Linear(128, 128), nn.ReLU())
+        self.vec = nn.Sequential(nn.Linear(O.N_SELF + O.N_COND, 128), nn.ReLU())
+        self.trunk = nn.Sequential(nn.Linear(512, d), nn.ReLU())
+        self.gru = nn.GRUCell(d, HID)
+        self.pi = nn.Linear(d + HID, 17 + 3 + 8); self.v = nn.Linear(d + HID, 1)
+        self.cand = nn.Sequential(nn.Linear(d + HID + O.F_ENT, 128), nn.ReLU(), nn.Linear(128, 3))
+        self.vp = nn.Sequential(nn.Linear(d + HID + PRIV, 256), nn.ReLU(), nn.Linear(256, 1))
+        nn.init.zeros_(self.vp[2].weight); nn.init.zeros_(self.vp[2].bias)
+        self.free = nn.Linear(d + HID, 360); self.free_score = nn.Linear(d + HID, 1)
+        nn.init.orthogonal_(self.pi.weight, 0.01); nn.init.zeros_(self.pi.bias); nn.init.zeros_(self.free.weight)
+        self.register_buffer("bins", torch.arange(360).float())
+
+    def encode(self, s, ent, grid):
+        e = self.ent(ent).masked_fill(ent[..., :1] < 0.5, 0.0).amax(1)             # set pooling over the present slots
+        g = self.grid(self.emb(grid.long()).permute(0, 3, 1, 2))
+        return self.trunk(torch.cat([self.vec(s), e, g], -1))
+
+    def heads(self, x, ent, priv=None):
+        """x = cat[trunk, gru]. The aim head is nirkt's PointerAim: a bump at every target's angle (+ a learned lead of
+        up to 25 degrees, learned width) mixed with a free 360-bin component; log-probabilities."""
+        mv, fi, di = torch.split(self.pi(x), [17, 3, 8], -1)
+        c = ent[:, _CAND]; B, K, _ = c.shape
+        here = (c[..., 0] > 0.5) & (c[..., _FOE].sum(-1) > 0.5)
+        o = self.cand(torch.cat([x[:, None].expand(B, K, x.shape[-1]), c], -1))
+        mu = torch.rad2deg(torch.atan2(c[..., O.XY + 1], c[..., O.XY])) % 360.0 + 25.0 * torch.tanh(o[..., 1])
+        dd = (self.bins - mu[..., None]).abs() % 360.0; dd = torch.minimum(dd, 360.0 - dd)
+        bump = torch.log_softmax(-0.5 * (dd / (F.softplus(o[..., 2]) + 0.7)[..., None]) ** 2, -1)
+        mix = torch.log_softmax(torch.cat([o[..., 0].masked_fill(~here, -1e9), self.free_score(x)], -1), -1)
+        comp = torch.cat([bump, torch.log_softmax(self.free(x), -1)[:, None]], 1)
+        v = self.v(x).squeeze(-1)
+        if priv is not None: v = v + self.vp(torch.cat([x, priv], -1)).squeeze(-1)
+        return (mv, fi, torch.logsumexp(mix[..., None] + comp, 1), di), v
+
+    def forward(self, s, ent, grid, h, priv=None):
+        x = self.encode(s, ent, grid); h = self.gru(x, h)
+        return (*self.heads(torch.cat([x, h], -1), ent, priv), h)
+
+    def seq(self, s, ent, grid, h, priv=None):
+        N, L = s.shape[:2]; f = lambda t: t.flatten(0, 1)
+        x = self.encode(f(s), f(ent), f(grid)).view(N, L, -1); hs = []
+        for t in range(L):
+            h = self.gru(x[:, t], h); hs.append(h)
+        return self.heads(f(torch.cat([x, torch.stack(hs, 1)], -1)), f(ent), None if priv is None else f(priv))
+
+
+def masked_kl(ref, new):
+    """KL(ref || new) of the factored policy: move + fire + P_ref(fire > 0) aim + P_ref(super) distance (nirkt F1.4)"""
+    kl = []
+    for a, b in zip(ref, new):
+        pa, pb = torch.log_softmax(a.float(), -1), torch.log_softmax(b.float(), -1)
+        kl.append((pa.exp() * (pa - pb)).sum(-1))
+    pf = torch.softmax(ref[1].float(), -1)
+    return kl[0] + kl[1] + (1 - pf[:, 0]) * kl[2] + pf[:, 2] * kl[3]
+
+
+def _check():
+    torch.manual_seed(0); net = Policy(); N, L = 3, 4
+    s = torch.randn(N, L, O.N_SELF + O.N_COND); ent = torch.zeros(N, L, O.N_ENT, O.F_ENT)
+    grid = torch.randint(0, O.UNKNOWN + 1, (N, L, O.G, O.G), dtype=torch.uint8)
+    ent[:, :, 0, 0] = 1; ent[:, :, 0, 1 + O.ENT.index("enemy")] = 1; ent[:, :, 0, O.XY] = 0.3      # an enemy straight right
+    ent[:, :, 1, 0] = 1; ent[:, :, 1, 1 + O.ENT.index("teammate")] = 1; ent[:, :, 1, O.XY + 1] = 0.3   # a teammate below
+    pv = torch.randn(N, L, PRIV); h = torch.zeros(N, HID); outs = []
+    assert torch.equal(net.seq(s, ent, grid, h, pv)[1], net.seq(s, ent, grid, h)[1])     # zero-init branch: an old checkpoint's value
+    nn.init.normal_(net.vp[2].weight, std=0.1)
+    for t in range(L):                                    # step by step == seq from the same h0
+        lg, v, h = net(s[:, t], ent[:, t], grid[:, t], h, pv[:, t]); outs.append((lg, v))
+    lg2, v2 = net.seq(s, ent, grid, torch.zeros(N, HID), pv)
+    assert [x.shape[-1] for x in lg2] == NVEC and v2.shape == (N * L,)
+    assert torch.allclose(torch.stack([o[1] for o in outs], 1).flatten(), v2, atol=1e-5)
+    assert torch.allclose(torch.stack([o[0][2] for o in outs], 1).flatten(0, 1), lg2[2], atol=1e-4)
+    p = lg2[2].exp(); assert torch.allclose(p.sum(-1), torch.ones(N * L), atol=1e-4)
+    near = lambda a: p[:, [(a + k) % 360 for k in range(-30, 31)]].sum(-1).mean().item()
+    assert near(0) > 3 * near(90), (near(0), near(90))    # mass at the enemy (0 deg), none pulled to the teammate (90 deg)
+    lp, en, a = dist_logp_ent(lg2); assert a.shape == (N * L, 4) and torch.isfinite(lp).all()
+    assert masked_kl(lg2, lg2).abs().max() < 1e-5
+    (lp.mean() + v2.mean()).backward()
+    print("model ok: %d parameters" % sum(x.numel() for x in net.parameters()))
+
+
+if __name__ == "__main__":
+    _check()
