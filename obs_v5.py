@@ -13,7 +13,7 @@
 Source = the host's state2 vector + grid after nbpc.fair (already camera- and bush-limited). Needs the rl-round
 host `nbhost_rl` (enemy features 14 / 15 = summon / on my team, self 18 = hypercharge fraction, grid channel 0 =
 tiles.csv row + 1); with an older host teammates read as enemies and the tiles are wrong.
-shortcut: the host dumps no area effects and no gadget state (self 3 stays 0), and faded_bush / power_box tiles are
+shortcut: area effects have no radius / kind (one class per side), the host dumps no gadget state (self 3 stays 0), and faded_bush / power_box tiles are
 render states the tile map does not have; add them to snap2 / encode.c when the policy needs them.
 shortcut: no box size (the sim has none; a per-class constant adds nothing to the one-hot); add with the bot adapter.
 """
@@ -92,8 +92,9 @@ def from_state2(vec, grid, meta):
     k = fill(0, en, (2 * (en[..., 14] > 0.5) + (en[..., 15] > 0.5)).astype(np.int64), vel=40 / 300, hp=5)
     k = fill(k, pj, np.where(pj[..., 5] > 0.5, _E("teammate_projectile"), _E("enemy_projectile")), vel=200 / 300)
     k = fill(k, bx, np.full(bx.shape[:2], _E("power_box")), hp=3)
-    it = it.copy(); it[..., 0] *= (it[..., 3] > 0.5) | (it[..., 4] > 0.5)          # other items are not detected classes
-    fill(k, it, np.where(it[..., 3] > 0.5, _E("power_cube"), _E("enemy_area_effect")))   # item 4 = showdown bomb
+    it = it.copy(); it[..., 0] *= (it[..., 3] > 0.5) | (np.abs(it[..., 4]) > 0.5)  # other items are not detected classes
+    # item 4: 1 = showdown bomb or enemy area effect, -1 = area effect of my team (nbhost_rl encode.c)
+    fill(k, it, np.select([it[..., 3] > 0.5, it[..., 4] < -0.5], [_E("power_cube"), _E("teammate_area_effect")], _E("enemy_area_effect")))
 
     g = _tile_lut()[grid[:, 0]]
     g[(grid[:, 3] > 0) & (g == _S("floor"))] = _S("poison")
@@ -228,7 +229,7 @@ def _check():
     grid[:, 0] = tile("Open")
     row(F.PJ0, F.PJ_F, 0, [1, 0.1, 0.1, 1, 0, 1, 0]); row(F.PJ0, F.PJ_F, 1, [1, 0.2, 0.1, 0, 1, 0, 1])
     row(F.BX0, F.BX_F, 0, [1, 0.3, 0.3, 0.6])
-    row(F.IT0, F.IT_F, 0, [1, 0.4, 0, 1, 0]); row(F.IT0, F.IT_F, 1, [1, 0.4, 0, 0, 1]); row(F.IT0, F.IT_F, 2, [1, 0.4, 0, 0, 0])
+    row(F.IT0, F.IT_F, 0, [1, 0.4, 0, 1, 0]); row(F.IT0, F.IT_F, 1, [1, 0.4, 0, 0, 1]); row(F.IT0, F.IT_F, 2, [1, 0.4, 0, 0, 0]); row(F.IT0, F.IT_F, 3, [1, 0.4, 0, 0, -1])
     grid[0, 0, 12, 13] = tile("Indestructible"); grid[0, 0, 12, 14] = tile("Forest"); grid[0, 3, 12, 14] = 1
     grid[0, 0, 12, 15] = tile("Wall1"); grid[0, 0, 12, 16] = tile("Water"); grid[0, 0, 12, 17] = tile("RopeFence")
     grid[0, 3, 5, 5] = 1; grid[0, 4, 3, 3] = 1; grid[0, 0, 3, 3] = 0
@@ -238,9 +239,9 @@ def _check():
     e = o["ent"][0]; cls = lambda k: ENT[int(e[k, 1:1 + len(ENT)].argmax())]
     got = [(k, cls(k)) for k in np.nonzero(e[:, 0])[0]]
     assert got == [(0, "enemy"), (1, "teammate"), (2, "enemy_summon"), (3, "teammate_summon"), (9, "teammate_projectile"),
-                   (10, "enemy_projectile"), (25, "power_box"), (31, "power_cube"), (32, "enemy_area_effect")], got
+                   (10, "enemy_projectile"), (25, "power_box"), (31, "power_cube"), (32, "enemy_area_effect"), (34, "teammate_area_effect")], got
     assert np.allclose(e[0, XY:], [0.5, -0.2, 40 / 300, 0, 0.8]) and np.allclose(e[10, VEL:VEL + 2], [0, 200 / 300])
-    assert e[:, 1:1 + len(ENT)].sum() == 9 and not o["ent"][1].any()
+    assert e[:, 1:1 + len(ENT)].sum() == 10 and not o["ent"][1].any()
     g = o["grid"][0]
     assert (g[12, 13], g[12, 14], g[5, 5], g[3, 3], g[12, 12]) == (_S("indestructible"), _S("bush"), _S("poison"),
                                                                  _S("out_of_bounds"), _S("floor"))

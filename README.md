@@ -45,29 +45,36 @@ Always pass scripts on stdin; `wsl ... bash -lc '...$VAR...'` loses the quotes a
   `NB_PIX_CAP`, PYTHONPATH (our `vendor/nbpc` first), activates `~/nb68/venv`. Keep it LF (CRLF breaks every variable).
 - `env_v5.py`: `heroes()` (115 playable rows), `locations()` (25 Showdown maps), `make_battle_fn(agents)` (random
   brawlers / map / 0-2 mates for player 0), `Env` (MAEnv + crash log), benchmark `main`. `skip.json` (optional)
-  lists brawlers / locations to leave out.
+  lists brawlers / locations to leave out. Generated maps: `use_genmaps(k)` (call before `Env`) boots instances
+  0..k-1 from `~/nb68/rl/genmaps/r*/game` (12 layouts, `framegen/genmap.py OUT --seed N`, one layout per instance);
+  `make_battle_fn(gen=..., p_gen=0.5)` plays location `Survival612` there = the generated layout (tag `loc` = `r1xx`).
+  A layout with a PayloadTrack tile (`b`) crashes the boot (rc 139): `use_genmaps` skips those.
+- `live_check.py --n 2 --minutes 6 --gen 1`: one boot checks team reward, area effects and generated maps (asserts).
 - `obs_v5.py`: `ObsV5().build(obs["vec"], obs["grid"], env.last_meta, ids)` -> `self` (B, 8), `ent` (B, 39, 16),
   `grid` (B, 25, 25) seg class ids with UNKNOWN outside the camera view; per-episode noise (jitter, dropout, false
   positives, seg tile errors, 1-2 decisions latency; the `NOISE` ranges are guesses until `measure_noise.py`);
   `cond(brawler, sliders, team_size)` (26,). `python -m obs_v5` = self-check, `--live` adds 300 real decisions
   (passes; 20 us per decision at batch 10; also checks the host's teams against the requested groups). Classes:
   enemy / teammate / their summons, projectiles per side, power_box, power_cube, showdown bomb; tiles by the
-  `classes.py` seg rule; hypercharge ready. Missing: area effects, gadget ready (always 0), faded_bush / power_box
+  `classes.py` seg rule; hypercharge ready, area effects per side (no radius /
+  kind). Missing: gadget ready (always 0), faded_bush / power_box
   tiles, box size. Noisy path only: entity velocity = differenced noisy positions (0 on first sight / after a drop,
   matched to the last decision by class within 1 tile), tiles under the HUD controls UNKNOWN (`hud_mask`, an
   approximate screen-to-tile scale). The bot-side adapter (perception + tracking -> same arrays) and the
   sim-vs-labels test are not written.
 - Adapter contract (what the bot-side adapter must do so the real game matches `ObsV5`): (1) drop detections
   outside the sim window |dx| < 4500, -3500 < dy < 2900 world units (a 16:9 frame likely shows more sideways than the
-  sim; not measured); (2) seg `ui` -> UNKNOWN, `faded_bush` -> `bush`, `power_box` tiles -> `floor`; (3) area-effect
-  entities zeroed until the host dumps them; (4) slot order is free (the policy max-pools entities); (5) HP fractions
+  sim; not measured); (2) seg `ui` -> UNKNOWN, `faded_bush` -> `bush`, `power_box` tiles -> `floor`; (3) area effects
+  as one class per side (own + mates = teammate), position only; (4) slot order is free (the policy max-pools entities); (5) HP fractions
   and ammo from the bar pixels, not from the detector.
 - Host = `~/nb68/bulletlabels/native/loader/nbhost_rl` (rl round; `nbhost_maps` is left as it was). Build:
   `cd ~/nb68/bulletlabels/native/loader && sed 's/nbhost_spawnfix2/nbhost_rl/g' build.sh | sh`. Originals of every
   file changed: `*.orig_rl` (env.c, encode.c, vendor/nbpc/instance.py, fair.py). Changes: `div["team_groups"]`
   (group 0-7 per player, 0 = alone); state2 enemy rows now include summons, feature 14 = summon, 15 = on my team
   (were: last hit by me, is Piper); self 18 = hypercharge fraction (was gas step); grid channel 0 = tiles.csv
-  row + 1 (was wall 0/1); `Player.reserved` = hypercharge, its max, team; fair.py never bush-hides teammates.
+  row + 1 (was wall 0/1); `Player.reserved` = hypercharge, its max, team; fair.py never bush-hides teammates;
+  item feature 4 = 1 bomb or enemy area effect (data 17xxxxxx, already in the items dump), -1 my team's area effect
+  (was: bomb only; area effects were 0); instance.py `APK_BY_IDX` = per-instance game dir.
   Anything of nirkt's that reads those old fields is wrong on this host. Test-only actions: fire 100 + k = raw
   input kind k, fire 200 + i = skill slot i (`~/nb68/rl/hyp_kind.py`).
 - Benchmark on `nbhost_rl`: n=4 19.8k decisions/s, 211 battles, 0 restarts.
@@ -219,9 +226,10 @@ branch `rl-v5` (this folder is the git repo).
 2. Stage 2 (generalist): per-brawler adapter in `model.py`, `make_battle_fn` rosters / maps / teams, sliders on.
    Team placement is in `Env` (team rank = best member rank; a battle cut short by end "agents" ranks a living native
    mate by the truncation estimate). Open host-side work (not done; each needs a host rebuild + a live test when the
-   machine is free): area effects in the state dump; teammate respawn in duo / trio (absent: Solo underneath); trio
+   machine is free): teammate respawn in duo / trio (absent: Solo underneath; needs RE + an episode change, owner's
+   call: HISTORY 49); trio
    is 3 teams + 1 solo (10 players, real mode 12); enemy rows share 9 slots between players and summons (overflow
-   is silent); `locations()` has only the 25 shipped Showdown maps (generated maps not wired); the sim-vs-labels
+   is silent); the sim-vs-labels
    observation test is not written.
 3. Speed: up to 6 small forward passes per poll now (learner / 3 league slots / eval / base); batch them or CUDA graphs if
    decisions/s is the limit.

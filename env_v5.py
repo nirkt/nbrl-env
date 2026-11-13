@@ -36,13 +36,31 @@ def locations():
             if r.get("GameModeVariation") == "Showdown" and r.get("Disabled") != "true" and n not in bad]
 
 
-def make_battle_fn(agents=10, seed0=10_000_000, roster=None, locs=None, p_team=0.5):
-    roster = roster or heroes(); locs = locs or locations()
+GEN_DIR = os.path.expanduser("~/nb68/rl/genmaps")   # framegen/genmap.py OUT --seed N: OUT/game = game files with OUT's layout
+GEN_BASE = "Survival612"                              # as this location's map (genmap's default base)
+
+
+def use_genmaps(n_inst, dirs=None):
+    """instances 0..n_inst-1 boot from a generated map's game dir (one layout per instance, round robin); call before
+    Env(). Returns {instance: dir}. On those instances location GEN_BASE plays the generated layout."""
+    from nbpc import instance as NI
+    if dirs is None:   # a PayloadTrack tile ('b', from a Payload source map) crashes the boot (rc 139, libg+0xc2fed8)
+        dirs = sorted(os.path.join(GEN_DIR, d, "game") for d in os.listdir(GEN_DIR)) if os.path.isdir(GEN_DIR) else []
+        dirs = [d for d in dirs if "b" not in open(os.path.join(os.path.dirname(d), "layout.txt")).read()]
+    NI.APK_BY_IDX.clear(); NI.APK_BY_IDX.update({i: dirs[i % len(dirs)] for i in range(n_inst)} if dirs else {})
+    return dict(NI.APK_BY_IDX)
+
+
+def make_battle_fn(agents=10, seed0=10_000_000, roster=None, locs=None, p_team=0.5, gen=None, p_gen=0.5):
+    """gen = use_genmaps()'s {instance: dir}: there a battle plays the generated layout with probability p_gen"""
+    roster = roster or heroes(); locs = locs or locations(); gen = gen or {}
     seeds = iter(range(seed0, seed0 + 10 ** 9))
 
     def battle_fn(rng, i):
         br = [roster[int(rng.integers(len(roster)))] for _ in range(10)]
-        loc = locs[int(rng.integers(len(locs)))]
+        g = gen.get(i) if i in gen and rng.random() < p_gen else None
+        loc = GEN_BASE if g else locs[int(rng.integers(len(locs)))]
+        if not g and i in gen and loc == GEN_BASE: loc = locs[(locs.index(loc) + 1) % len(locs)]   # shipped map not on this instance
         div = D.make_div(location=loc, chr=br)
         size = int(rng.integers(2, 4)) if rng.random() < p_team else 1
         groups = [0] * 10                                    # group id per player, 0 = alone (host: nbhost_rl)
@@ -51,7 +69,7 @@ def make_battle_fn(agents=10, seed0=10_000_000, roster=None, locs=None, p_team=0
             div["team_groups"] = groups
         ctl = sorted(int(p) for p in rng.choice(10, size=agents, replace=False))
         return {"seed": next(seeds), "ctl": ctl, "end": "agents", "div": div,
-                "tag": {"loc": loc, "chr": br, "team_size": size, "groups": groups}}
+                "tag": {"loc": os.path.basename(os.path.dirname(g)) if g else loc, "chr": br, "team_size": size, "groups": groups}}
     return battle_fn
 
 
@@ -272,11 +290,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=12); ap.add_argument("--minutes", type=float, default=5)
     ap.add_argument("--agents", type=int, default=10); ap.add_argument("--ticks", type=int, default=2)
-    ap.add_argument("--out", default="bench.jsonl")
+    ap.add_argument("--out", default="bench.jsonl"); ap.add_argument("--gen", type=int, default=0, help="instances on generated maps")
     ap.add_argument("--check", action="store_true", help="slider reward self-check (no game)")
     a = ap.parse_args()
     if a.check: return _check()
-    env = Env(a.n, make_battle_fn(a.agents), ticks=a.ticks, fair=True, max_ticks=4000)
+    env = Env(a.n, make_battle_fn(a.agents, gen=use_genmaps(a.gen) if a.gen else None), ticks=a.ticks, fair=True, max_ticks=4000)
     rng = np.random.default_rng(0); t0 = None; steps = 0
     try:
         while t0 is None or time.time() - t0 < a.minutes * 60:
