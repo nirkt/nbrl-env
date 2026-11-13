@@ -164,11 +164,16 @@ def bar_fill(img, b, side=None):
     return f
 
 
+HUD_CTL = ("movement_joystick", "attack_joystick", "super_ready", "super_empty", "gadget_ready", "gadget_empty",
+           "hypercharge_ready", "hypercharge_empty")
+
+
 def in_battle(det):
-    """our own brawler is on the field and ours to steer: own HP bar + a joystick. False on lobby / end screens (det can box
-    portraits as player), death spectate (another brawler's bar, no joysticks) and the respawn countdown (HISTORY 58)"""
+    """our own brawler is on the field and ours to steer: own HP bar + a control (joystick or super / gadget / hypercharge
+    button; det misses the faded joystick when it is not touched, HISTORY 59). False on lobby / end screens (det can box
+    portraits as player), death spectate (another brawler's bar, no controls) and the respawn countdown (HISTORY 58)"""
     c = np.asarray(det).reshape(-1, 5)[:, 0].astype(int)
-    return bool((c == _D("player_health")).any() and np.isin(c, [_D("movement_joystick"), _D("attack_joystick")]).any())
+    return bool((c == _D("player_health")).any() and np.isin(c, [_D(n) for n in HUD_CTL]).any())
 
 
 class Adapter:
